@@ -12,7 +12,8 @@
     "watch": "tsc --watch",
     "dev": "tsc && node build/index.js",
     "prepare": "npm run build",
-    "sync-docs": "bash scripts/sync-docs.sh"
+    "sync-docs": "bash scripts/sync-docs.sh",
+    "setup": "bash scripts/setup-cli.sh"
   },
   "keywords": [
     "payload",

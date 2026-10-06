@@ -15,7 +15,8 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Paths
-MCP_SERVER_PATH="/Users/tony/ghq/github.com/tony-sn/mcp/payload-cms/payload-cms-mcp-server/build/index.js"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MCP_SERVER_PATH="${SCRIPT_DIR}/build/index.js"
 GLOBAL_CLAUDE_DIR="$HOME/.claude"
 GLOBAL_MCP_CONFIG="$GLOBAL_CLAUDE_DIR/mcp.json"
 LOCAL_CLAUDE_DIR=".claude"
@@ -50,24 +51,15 @@ setup_global() {
 	fi
 
 	# Create config
-	cat >"$GLOBAL_MCP_CONFIG" <<'EOF'
+	cat >"$GLOBAL_MCP_CONFIG" <<EOF
 {
   "mcpServers": {
     "payload-cms": {
       "command": "node",
       "args": [
-        "/Users/tony/ghq/github.com/tony-sn/mcp/payload-cms/payload-cms-mcp-server/build/index.js"
+        "$MCP_SERVER_PATH"
       ],
       "env": {}
-    },
-    "filesystem": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "/Users/tony/ghq",
-        "/Users/tony/projects"
-      ]
     }
   }
 }
@@ -85,13 +77,13 @@ setup_local() {
 	mkdir -p "$LOCAL_CLAUDE_DIR"
 
 	# Create MCP config
-	cat >"$LOCAL_MCP_CONFIG" <<'EOF'
+	cat >"$LOCAL_MCP_CONFIG" <<EOF
 {
   "mcpServers": {
     "payload-cms": {
       "command": "node",
       "args": [
-        "/Users/tony/ghq/github.com/tony-sn/mcp/payload-cms/payload-cms-mcp-server/build/index.js"
+        "$MCP_SERVER_PATH"
       ],
       "env": {
         "PROJECT_ROOT": "."
