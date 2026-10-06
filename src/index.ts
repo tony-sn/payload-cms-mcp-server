@@ -6,6 +6,13 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import * as fs from "fs/promises";
 import * as path from "path";
+import {
+  searchDocs,
+  getDoc,
+  listDocTopics,
+  loadDocIndex,
+  loadDocSections,
+} from "./docs.js";
 
 // Payload CMS field types
 const PAYLOAD_FIELD_TYPES = [
@@ -184,6 +191,79 @@ server.registerResource(
   },
 );
 
+// Official Documentation Resource Template
+server.registerResource(
+  "official-docs",
+  new ResourceTemplate("payload://docs/{slug}", {
+    list: async () => {
+      const sections = await loadDocSections();
+      return {
+        resources: sections.slice(0, 50).map((s) => ({
+          uri: `payload://docs/${s.slug}`,
+          name: s.title,
+          title: s.title,
+          mimeType: "text/markdown",
+        })),
+      };
+    },
+  }),
+  {
+    title: "Payload CMS Official Documentation",
+    description: "Official Payload CMS 3.x documentation section",
+    mimeType: "text/markdown",
+  },
+  async (uri, { slug }) => {
+    const slugStr = Array.isArray(slug) ? slug[0] : slug;
+    if (slugStr === "index" || slugStr === "overview") {
+      const indexText = await loadDocIndex();
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            text: indexText,
+          },
+        ],
+      };
+    }
+
+    const doc = await getDoc(slugStr);
+    if (!doc) {
+      throw new Error(`Documentation topic not found: ${slugStr}`);
+    }
+
+    return {
+      contents: [
+        {
+          uri: uri.href,
+          text: doc.content,
+        },
+      ],
+    };
+  },
+);
+
+// Documentation Index Resource
+server.registerResource(
+  "docs-index",
+  "payload://docs-index",
+  {
+    title: "Payload CMS Documentation Index",
+    description: "Complete topic index of official Payload CMS 3.x documentation",
+    mimeType: "text/markdown",
+  },
+  async (uri) => {
+    const indexText = await loadDocIndex();
+    return {
+      contents: [
+        {
+          uri: uri.href,
+          text: indexText,
+        },
+      ],
+    };
+  },
+);
+
 // =====================
 // TOOLS
 // =====================
@@ -305,6 +385,167 @@ server.registerTool(
         {
           type: "text",
           text: response,
+        },
+      ],
+    };
+  },
+);
+
+// Search official Payload CMS documentation
+server.registerTool(
+  "search_payload_docs",
+  {
+    title: "Search Payload CMS Documentation",
+    description:
+      "Search official Payload CMS 3.x documentation for topics, APIs, fields, hooks, databases, and best practices",
+    inputSchema: {
+      query: z
+        .string()
+        .describe(
+          "Keywords or topic to search (e.g. 'relationship field', 'postgres', 'beforeChange hook', 'access control')",
+        ),
+      limit: z
+        .number()
+        .optional()
+        .default(5)
+        .describe("Maximum results to return (default: 5)"),
+    },
+  },
+  async ({ query, limit }) => {
+    const results = await searchDocs(query, limit);
+
+    if (results.length === 0) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `No documentation matches found for "${query}". You can run \`list_payload_doc_topics\` to see all available documentation sections.`,
+          },
+        ],
+      };
+    }
+
+    const formatted = results
+      .map((r, i) => {
+        let text = `### ${i + 1}. ${r.title} (slug: \`${r.slug}\`)\n`;
+        if (r.sourceUrl) {
+          text += `**Source**: ${r.sourceUrl}\n`;
+        }
+        text += `**Excerpt**:\n> ${r.excerpt}\n\n`;
+        text += `_To view the complete section, call \`get_payload_doc\` with topic: "${r.slug}"_`;
+        return text;
+      })
+      .join("\n\n---\n\n");
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Found ${results.length} relevant Payload CMS documentation sections for "${query}":\n\n${formatted}`,
+        },
+      ],
+    };
+  },
+);
+
+// Get official Payload CMS documentation section
+server.registerTool(
+  "get_payload_doc",
+  {
+    title: "Get Payload CMS Documentation Section",
+    description:
+      "Retrieve the full official documentation content for a specific Payload CMS 3.x section or topic",
+    inputSchema: {
+      topic: z
+        .string()
+        .describe(
+          "Section title or slug (e.g. 'Collection Configs', 'collection-configs', 'postgres', 'relationship-field', or 'index')",
+        ),
+    },
+  },
+  async ({ topic }) => {
+    if (topic.toLowerCase() === "index" || topic.toLowerCase() === "overview") {
+      const indexText = await loadDocIndex();
+      return {
+        content: [
+          {
+            type: "text",
+            text: indexText,
+          },
+        ],
+      };
+    }
+
+    const doc = await getDoc(topic);
+    if (!doc) {
+      const suggestions = await searchDocs(topic, 3);
+      let notFoundText = `No exact documentation section found for "${topic}".`;
+      if (suggestions.length > 0) {
+        notFoundText += `\n\nDid you mean:\n${suggestions.map((s) => `- **${s.title}** (slug: \`${s.slug}\`)`).join("\n")}`;
+      } else {
+        notFoundText += `\n\nUse \`search_payload_docs\` or \`list_payload_doc_topics\` to explore available sections.`;
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: notFoundText,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: doc.content,
+        },
+      ],
+    };
+  },
+);
+
+// List official Payload CMS documentation topics
+server.registerTool(
+  "list_payload_doc_topics",
+  {
+    title: "List Payload CMS Documentation Topics",
+    description:
+      "List available documentation sections and slugs from official Payload CMS 3.x docs",
+    inputSchema: {
+      filter: z
+        .string()
+        .optional()
+        .describe(
+          "Optional keyword to filter topics (e.g. 'field', 'database', 'auth', 'config', 'hook')",
+        ),
+    },
+  },
+  async ({ filter }) => {
+    const topics = await listDocTopics(filter);
+    if (topics.length === 0) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `No documentation topics found matching filter: "${filter}".`,
+          },
+        ],
+      };
+    }
+
+    const filterMsg = filter ? ` matching "${filter}"` : "";
+    const listText = topics
+      .map((t) => `- **${t.title}** (slug: \`${t.slug}\`)`)
+      .join("\n");
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Available Payload CMS 3.x Documentation Topics${filterMsg} (${topics.length} total):\n\n${listText}\n\n_Use \`get_payload_doc\` with any topic or slug above to read its complete documentation._`,
         },
       ],
     };
