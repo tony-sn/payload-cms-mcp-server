@@ -56,27 +56,131 @@ npm run build
 
 ## 🔧 Configuration
 
-### For Claude Desktop
+### ⚡ Quick Setup (Automated)
+
+Run the interactive multi-CLI setup script to automatically configure any or all of your AI environments:
+
+```bash
+npm run setup
+# or with flags:
+# bash scripts/setup-cli.sh --all
+# bash scripts/setup-cli.sh --claude
+# bash scripts/setup-cli.sh --codex
+# bash scripts/setup-cli.sh --antigravity
+```
+
+---
+
+### 1. 🤖 Claude Code CLI
+
+#### Quick Command:
+```bash
+claude mcp add payload-cms node /path/to/payload-cms-mcp-server/build/index.js
+```
+
+#### Dedicated Setup Script:
+```bash
+bash setup-claude-code.sh
+```
+This script configures `~/.claude/mcp.json` and adds customized slash commands (`/payload-validate`, `/payload-new-collection`, `/payload-scaffold`, etc.).
+
+#### Manual Configuration (`~/.claude/mcp.json` or `.claude/mcp.json`):
+```json
+{
+  "mcpServers": {
+    "payload-cms": {
+      "command": "node",
+      "args": ["/path/to/payload-cms-mcp-server/build/index.js"]
+    }
+  }
+}
+```
+
+---
+
+### 2. ⚡ OpenAI Codex CLI
+
+#### Quick Command:
+```bash
+codex mcp add payload-cms -- node /path/to/payload-cms-mcp-server/build/index.js
+```
+
+#### Manual Configuration (`~/.codex/config.toml`):
+```toml
+[mcp_servers.payload-cms]
+command = "node"
+args = ["/path/to/payload-cms-mcp-server/build/index.js"]
+```
+
+---
+
+### 3. 🛸 Antigravity CLI (AGY) & Antigravity IDE
+
+#### Global Configuration (`~/.gemini/config/mcp_config.json`):
+```json
+{
+  "mcpServers": {
+    "payload-cms": {
+      "command": "node",
+      "args": ["/path/to/payload-cms-mcp-server/build/index.js"]
+    }
+  }
+}
+```
+
+#### Workspace / Project Configuration:
+Place in `.agents/mcp_config.json` in your Payload CMS project root to share with your team via git:
+```json
+{
+  "mcpServers": {
+    "payload-cms": {
+      "command": "node",
+      "args": ["/path/to/payload-cms-mcp-server/build/index.js"]
+    }
+  }
+}
+```
+
+---
+
+### 4. 🖥️ Claude Desktop
 
 Add to your Claude Desktop configuration file:
-
-**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
   "mcpServers": {
     "payload-cms": {
       "command": "node",
-      "args": ["/absolute/path/to/payload-cms-mcp-server/build/index.js"]
+      "args": ["/path/to/payload-cms-mcp-server/build/index.js"]
     }
   }
 }
 ```
 
-### For Other MCP Clients
+---
 
-Use stdio transport:
+### 5. 💻 Cursor & Windsurf
+
+Add to your project's `.cursor/mcp.json`:
+```json
+{
+  "mcpServers": {
+    "payload-cms": {
+      "command": "node",
+      "args": ["/path/to/payload-cms-mcp-server/build/index.js"]
+    }
+  }
+}
+```
+
+---
+
+### 6. 🔌 Other MCP Clients (TypeScript SDK)
+
+Connect via standard stdio transport:
 
 ```typescript
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
