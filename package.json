@@ -1,0 +1,37 @@
+{
+  "name": "payload-cms-mcp-server",
+  "version": "1.0.0",
+  "description": "Model Context Protocol server for Payload CMS 3.0 - validation, code generation, and project scaffolding",
+  "type": "module",
+  "main": "build/index.js",
+  "bin": {
+    "payload-cms-mcp": "build/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "dev": "tsc && node build/index.js",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "payload",
+    "cms",
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "llm"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
