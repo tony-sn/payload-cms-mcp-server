@@ -9,6 +9,14 @@ A specialized Model Context Protocol (MCP) server for Payload CMS 3.0 developmen
 - Get detailed feedback on syntax errors and best practices
 - Receive actionable suggestions for improvements
 
+### 📚 Official Documentation Knowledge Base
+- Full official Payload CMS 3.x documentation indexed from `payloadcms.com` (`llms-full.txt` & `llms.txt`)
+- **`search_payload_docs`**: Search 215+ official sections for topics, fields, hooks, databases, and configs
+- **`get_payload_doc`**: Retrieve full official documentation for any topic or slug
+- **`list_payload_doc_topics`**: Browse available official documentation topics
+- **Resources**: Access `payload://docs/{slug}` and `payload://docs-index` directly from MCP clients
+- **Automated Sync**: Keep docs always up to date with `npm run sync-docs` or the built-in weekly GitHub Action
+
 ### 📝 Code Generation
 - Generate complete collection definitions with proper TypeScript types
 - Create field definitions with validation and access control
