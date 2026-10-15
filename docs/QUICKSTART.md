@@ -5,21 +5,9 @@ Copy and paste these commands to get started quickly with your Payload CMS MCP S
 ## 🛠️ Installation
 
 ```bash
-# Navigate to your MCP directory
-cd /path/to/projects/github.com/tony-sn/mcp/payload-cms
-
-# Create the server directory
-mkdir -p payload-cms-mcp-server
+# Clone the MCP server
+git clone https://github.com/tony-sn/payload-cms-mcp-server.git
 cd payload-cms-mcp-server
-
-# Create source directory
-mkdir -p src
-
-# Copy the main server file to src/index.ts
-# (Use the code from the first artifact)
-
-# Copy package.json and tsconfig.json
-# (Use the code from the respective artifacts)
 
 # Install dependencies
 npm install
@@ -46,7 +34,7 @@ Add this configuration:
     "payload-cms": {
       "command": "node",
       "args": [
-        "/path/to/payload-cms-mcp-server/build/index.js"
+        "/absolute/path/to/payload-cms-mcp-server/build/index.js"
       ]
     },
     "filesystem": {
@@ -54,8 +42,7 @@ Add this configuration:
       "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "/path/to/projects",
-        "/path/to/projects"
+        "/absolute/path/to/your/payload-project"
       ]
     }
   }
@@ -204,7 +191,7 @@ cat ~/Library/Logs/Claude/mcp-server-payload-cms.log
 
 ### Rebuild server
 ```bash
-cd /path/to/payload-cms-mcp-server
+cd /absolute/path/to/payload-cms-mcp-server
 rm -rf build node_modules package-lock.json
 npm install
 npm run build
@@ -226,7 +213,7 @@ open -a Claude
 
 ### Test MCP server standalone
 ```bash
-cd /path/to/payload-cms-mcp-server
+cd /absolute/path/to/payload-cms-mcp-server
 node build/index.js
 
 # Should output: "Payload CMS MCP Server running on stdio"
@@ -359,7 +346,7 @@ tail -f ~/Library/Logs/Claude/mcp*.log
 
 ### Test server directly
 ```bash
-cd /path/to/payload-cms-mcp-server
+cd /absolute/path/to/payload-cms-mcp-server
 node build/index.js
 # Should run without errors
 ```

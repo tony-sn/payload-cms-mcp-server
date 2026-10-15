@@ -28,7 +28,7 @@ check_mcp_server() {
 	if [ ! -f "$MCP_SERVER_PATH" ]; then
 		echo -e "${YELLOW}⚠️  MCP server not found at $MCP_SERVER_PATH${NC}"
 		echo "Please build it first:"
-		echo "  cd /path/to/payload-cms-mcp-server"
+		echo "  cd $SCRIPT_DIR"
 		echo "  npm run build"
 		exit 1
 	fi
