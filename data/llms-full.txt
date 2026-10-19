@@ -194,7 +194,7 @@ Source: https://payloadcms.com/docs/getting-started/installation
 Payload requires the following software:
 
 - Any JavaScript package manager (pnpm, npm, or yarn 2+ - pnpm is preferred, yarn 1.x is not supported)
-- Node.js version 20.9.0+
+- Node.js version 20.18.1+
 - Next.js (one of the following version ranges):
   - `15.2.9` - `15.2.x`
   - `15.3.9` - `15.3.x`
@@ -383,6 +383,1177 @@ Once you have a Payload Config, update your `tsconfig` to include a `path` that 
 After you've reached this point, it's time to boot up Payload. Start your project in your application's folder to get going. By default, the Next.js dev script is `pnpm dev` (or `npm run dev` if using npm).
 
 After it starts, you can go to `http://localhost:3000/admin` to create your first Payload user!
+
+# 2.0 to 3.0 Migration Guide
+
+Source: https://payloadcms.com/docs/migration-guide/overview
+
+# Payload 2.0 to 3.0 Migration Guide
+
+Payload 3.0 completely replatforms the Admin Panel from a React Router single-page application onto the Next.js App Router with full support for React Server Components. This change completely separates Payload "core" from its rendering and HTTP layers, making it truly Node-safe and portable.
+
+If you are upgrading from a _previous beta_, please see the [Upgrade From Previous Beta](#upgrade-from-previous-beta) section.
+
+## What has changed?
+
+The core logic and principles of Payload remain the same from 2.0 to 3.0, with the majority of changes affecting specifically the HTTP layer and the Admin Panel, which is now built upon Next.js. With this change, your entire application can be served within a single repo, with Payload endpoints are now opened within your own Next.js application, directly alongside your frontend. Payload is still headless, you will still be able to leverage it completely headlessly just as you do now with Sveltekit, etc. All Payload APIs remain exactly the same (with a few new features), and the Payload Config is generally the same, with the breaking changes detailed below.
+
+### Table of Contents
+
+All breaking changes are listed below. If you encounter changes that are not explicitly listed here, please consider contributing to this documentation by submitting a PR.
+
+- [Installation](#installation)
+- [Breaking Changes](#breaking-changes)
+- [Custom Components](#custom-components)
+- [Endpoints](#endpoints)
+- [React Hooks](#react-hooks)
+- [Types](#types)
+- [Email Adapters](#email-adapters)
+- [Plugins](#plugins)
+- [Upgrade From Previous Beta](#upgrade-from-previous-beta)
+
+## Installation
+
+Payload 3.0 requires a set of auto-generated files that you will need to bring into your existing project. The easiest way of acquiring these is by initializing a new project via `create-payload-app`, then replace the provided Payload Config with your own.
+
+```bash
+  npx create-payload-app
+```
+
+For more details, see the [Documentation](/docs/v3/getting-started/installation.md).
+
+1. **Install new dependencies of Payload, Next.js and React**:
+
+   Refer to the package.json file made in the create-payload-app, including peerDependencies, devDependencies, and dependencies. The core package and plugins require all versions to be synced. Previously, on 2.x it was possible to be running the latest version of Payload 2.x with an older version of db-mongodb for example. This is no longer the case.
+
+   ```bash
+     pnpm i next react react-dom payload @payloadcms/ui @payloadcms/next
+   ```
+
+   Also install the other @payloadcms packages specific to the plugins and adapters you are using. Depending on your project, these may include:
+
+   - @payloadcms/db-mongodb
+   - @payloadcms/db-postgres
+   - @payloadcms/richtext-slate
+   - @payloadcms/richtext-lexical
+   - @payloadcms/plugin-form-builder
+   - @payloadcms/plugin-nested-docs
+   - @payloadcms/plugin-redirects
+   - @payloadcms/plugin-relationship
+   - @payloadcms/plugin-search
+   - @payloadcms/plugin-sentry
+   - @payloadcms/plugin-seo
+   - @payloadcms/plugin-stripe
+   - @payloadcms/plugin-cloud-storage - Read [More](#@payloadcms/plugin-cloud-storage).
+
+1. Uninstall deprecated packages:
+
+   ```bash
+   pnpm remove express nodemon @payloadcms/bundler-webpack @payloadcms/bundler-vite
+   ```
+
+1. Database Adapter Migrations
+
+   _If you have existing data_ and are using the MongoDB or Postgres adapters, you will need to run the database migrations to ensure your database schema is up-to-date.
+
+   - [postgres](https://github.com/payloadcms/payload/releases/tag/v3.0.0-beta.39)
+   - [mongodb](https://github.com/payloadcms/payload/releases/tag/v3.0.0-beta.131)
+
+1. For Payload Cloud users, the plugin has changed.
+
+   Uninstall the old package:
+
+   ```bash
+   pnpm remove @payloadcms/plugin-cloud
+   ```
+
+   Install the new package:
+
+   ```bash
+   pnpm i @payloadcms/payload-cloud
+   ```
+
+   ```diff
+   // payload.config.ts
+   - import { payloadCloud } from '@payloadcms/plugin-cloud'
+   + import { payloadCloudPlugin } from '@payloadcms/payload-cloud'
+
+   buildConfig({
+     // ...
+     plugins: [
+   -   payloadCloud()
+   +   payloadCloudPlugin()
+     ]
+   })
+   ```
+
+1. **Optional** sharp dependency
+
+   If you have upload enabled collections that use `formatOptions`, `imageSizes`, or `resizeOptions`—payload expects to have `sharp` installed. In 2.0 this was a dependency was installed for you. Now it is only installed if needed. If you have any of these options set, you will need to install `sharp` and add it to your payload.config.ts:
+
+   ```bash
+   pnpm i sharp
+   ```
+
+   ```diff
+   // payload.config.ts
+   import sharp from 'sharp'
+   buildConfig({
+   // ...
+   +   sharp,
+   })
+   ```
+
+## Breaking Changes
+
+1.  Delete the `admin.bundler` property from your Payload Config. Payload no longer bundles the Admin Panel. Instead, we rely directly on Next.js for bundling.
+
+    ```diff
+    // payload.config.ts
+    - import { webpackBundler } from '@payloadcms/bundler-webpack'
+
+    buildConfig({
+      // ...
+      admin: {
+        // ...
+    -   bundler: webpackBundler(),
+      }
+    })
+    ```
+
+    This also means that the `@payloadcms/bundler-webpack` and `@payloadcms/bundler-vite` packages have been deprecated. You can completely uninstall those from your project by removing them from your `package.json` file and re-running your package manager’s installation process, i.e. `pnpm i`.
+
+1.  Add the `secret` property to your Payload Config. This used to be set in the `payload.init()` function of your `server.ts` file. Instead, move it to `payload.config.ts`:
+
+    ```diff
+    // payload.config.ts
+
+    buildConfig({
+      // ...
+    + secret: process.env.PAYLOAD_SECRET
+    })
+    ```
+
+1.  Environment variables prefixed with `PAYLOAD_PUBLIC` will no longer be available on the client. In order to access them on the client, those will now have to be prefixed with `NEXT_PUBLIC` instead.
+
+    ```diff
+    'use client'
+    - const var = process.env.PAYLOAD_PUBLIC_MY_ENV_VAR
+    + const var = process.env.NEXT_PUBLIC_MY_ENV_VAR
+    ```
+
+    For more details, see the [Documentation](/docs/v3/configuration/environment-vars.md).
+
+1.  The `req` object used to extend the [Express Request](https://expressjs.com/), but now extends the [Web Request](https://developer.mozilla.org/en-US/docs/Web/API/Request). You may need to update your code accordingly to reflect this change. For example:
+
+    ```diff
+    - req.headers['content-type']
+    + req.headers.get('content-type')
+    ```
+
+1.  The `admin.css` and `admin.scss` properties in the Payload Config have been removed.
+
+    ```diff
+    // payload.config.ts
+
+    buildConfig({
+      // ...
+      admin: {
+        // ...
+    -   css: '',
+    -   scss: ''
+      }
+    })
+    ```
+
+    To migrate, choose one of the following options:
+
+    1. For most use cases, you can simply customize the file located at `(payload)/custom.scss`. You can import or add your own styles here, such as for Tailwind.
+    1. For plugins author, you can use a Custom Provider at `admin.components.providers` to import your stylesheet:
+
+       ```tsx
+       // payload.config.js
+
+       //...
+       admin: {
+         components: {
+           providers: [
+             MyProvider: './providers/MyProvider.tsx'
+           ]
+         }
+       },
+       //...
+
+       // providers/MyProvider.tsx
+
+       'use client'
+       import React from 'react'
+       import './globals.css'
+
+       export const MyProvider: React.FC<{children?: any}= ({ children }) ={
+         return (
+           <React.fragment>
+             {children}
+           </React.fragment>
+         )
+       }
+       ```
+
+1.  The `admin.indexHTML` property has been removed. Delete this from your Payload Config.
+
+    ```diff
+    // payload.config.ts
+
+    buildConfig({
+      // ...
+      admin: {
+        // ...
+    -   indexHTML: ''
+      }
+    })
+    ```
+
+1.  The `collection.admin.hooks` property has been removed. Instead, use the new `beforeDuplicate` field-level hook which take the usual field hook arguments.
+
+    ```diff
+    // collections/Posts.ts
+    import type { CollectionConfig } from 'payload'
+
+    export const PostsCollection: CollectionConfig = {
+      slug: 'posts',
+      admin: {
+        hooks: {
+    -     beforeDuplicate: ({ data }) => {
+    -       return {
+    -         ...data,
+    -         title: `${data.title}-duplicate`
+    -       }
+    -     }
+        }
+      },
+      fields: [
+        {
+          name: 'title',
+          type: 'text',
+          hooks: {
+    +      beforeDuplicate: [
+    +        ({ data }) => `${data.title}-duplicate`
+    +      ],
+          },
+        },
+      ],
+    }
+    ```
+
+1.  Fields with `unique: true` now automatically be appended with “- Copy” through the new `admin.beforeDuplicate` field hooks (see previous bullet).
+
+1.  The `upload.staticDir` property must now be an absolute path. Before it would attempt to use the location of the Payload Config and merge the relative path set for staticDir.
+
+    ```diff
+    // collections/Media.ts
+    import type { CollectionConfig } from 'payload'
+    import path from 'path'
+    + import { fileURLToPath } from 'url'
+
+    + const filename = fileURLToPath(import.meta.url)
+    + const dirname = path.dirname(filename)
+
+    export const MediaCollection: CollectionConfig = {
+      slug: 'media',
+      upload: {
+    -   staticDir: path.resolve(__dirname, './uploads'),
+    +   staticDir: path.resolve(dirname, '../uploads'),
+      },
+    }
+    ```
+
+1.  The `upload.staticURL` property has been removed. If you were using this format URLs when using an external provider, you can leverage the `generateFileURL` functions in order to do the same.
+
+    ```diff
+    // collections/Media.ts
+    import type { CollectionConfig } from 'payload'
+
+    export const MediaCollection: CollectionConfig = {
+      slug: 'media',
+      upload: {
+    -   staticURL: '',
+      },
+    }
+    ```
+
+1.  The `admin.favicon` property is now `admin.icons` and the types have changed:
+
+    ```diff
+    // payload.config.ts
+    import { buildConfig } from 'payload'
+
+    const config = buildConfig({
+      // ...
+      admin: {
+    -   favicon: 'path-to-favicon.svg',
+    +   icons: [{
+    +     path: 'path-to-favicon.svg',
+    +     sizes: '32x32'
+    +   }]
+      }
+    })
+    ```
+
+    For more details, see the [Documentation](/docs/v3/admin/metadata.md#icons).
+
+1.  The `admin.meta.ogImage` property has been replaced by `admin.meta.openGraph.images`:
+
+    ```diff
+    // payload.config.ts
+    import { buildConfig } from 'payload'
+
+    const config = buildConfig({
+      // ...
+      admin: {
+        meta: {
+    -     ogImage: '',
+    +     openGraph: {
+    +       images: []
+    +     }
+        }
+      }
+    })
+    ```
+
+    For more details, see the [Documentation](/docs/v3/admin/metadata.md#open-graph).
+
+1.  The args of the `admin.livePreview.url` function have changed. It no longer receives `documentInfo` as an arg, and instead, now has `collectionConfig` and `globalConfig`.
+
+    ```diff
+    // payload.config.ts
+    import { buildConfig } from 'payload'
+
+    export default buildConfig({
+      // ...
+      admin: {
+        // ...
+        livePreview: ({
+    -     documentInfo,
+    +     collectionConfig,
+    +     globalConfig
+        }) => ''
+      }
+    })
+    ```
+
+1.  The `admin.logoutRoute` and `admin.inactivityRoute` properties have been consolidated into a single `admin.routes` property. To migrate, simply move those two keys as follows:
+
+    ```diff
+    // payload.config.ts
+    import { buildConfig } from 'payload'
+
+    const config = buildConfig({
+      // ...
+      admin: {
+    -   logoutRoute: '/custom-logout',
+    +   inactivityRoute: '/custom-inactivity'
+    +   routes: {
+    +     logout: '/custom-logout',
+    +     inactivity: '/custom-inactivity'
+    +   }
+      }
+    })
+    ```
+
+1.  The `custom` property in the Payload Config, i.e. Collections, Globals, and Fields is now **server only** and will **not** appear in the client-side bundle. To add custom properties to the client bundle, use the new `admin.custom` property, which will be available on _both_ the server and the client.
+
+    ```diff
+    // payload.config.ts
+    import { buildConfig } from 'payload'
+
+    export default buildConfig({
+      custom: {
+        someProperty: 'My Server Prop' // Now server only!
+      },
+      admin: {
+    +   custom: {
+    +     name: 'My Client Prop' // Available in server AND client
+    +   }
+      },
+    })
+    ```
+
+1.  `hooks.afterError` is now an array of functions instead of a single function. The args have also been expanded. Read [More](/docs/v3/hooks/overview.md#root-hooks).
+
+    ```diff
+    // payload.config.ts
+    import { buildConfig } from 'payload'
+
+    export default buildConfig({
+      hooks: {
+    -   afterError: async ({ error }) => {
+    +   afterError: [
+    +     async ({ error, req, res }) => {
+    +       // ...
+    +     }
+    +   ]
+      }
+    })
+    ```
+
+1.  The `./src/public` directory is now located directly at root level `./public` [see Next.js docs for details](https://nextjs.org/docs/pages/building-your-application/optimizing/static-assets)
+
+1.  Payload now automatically removes `localized: true` property from sub-fields if a parent is localized, as it's redundant and unnecessary. If you have some existing data in this structure and you want to disable that behavior, you need to enable `allowLocalizedWithinLocalized` flag in your payload.config [read more in documentation](/docs/v3/configuration/overview.md#compatibility-flags), or create a migration script that aligns your data.
+    Mongodb example for a link in a page layout.
+
+        ```diff
+        - layout.columns.en.link.en.type.en
+        + layout.columns.en.link.type
+        ```
+
+## Custom Components
+
+1. All Payload React components have been moved from the `payload` package to `@payloadcms/ui`. If you were previously importing components into your app from the `payload` package, for example to create Custom Components, you will need to change your import paths:
+
+   ```diff
+   - import { TextField, useField, etc. } from 'payload'
+   + import { TextField, useField, etc. } from '@payloadcms/ui'
+   ```
+
+   _Note: for brevity, not *all* modules are listed here_
+
+1. All Custom Components are now defined as _file paths_ instead of direct imports. If you are using Custom Components in your Payload Config, remove the imported module and point to the file's path instead:
+
+   ```diff
+   import { buildConfig } from 'payload'
+   - import { MyComponent } from './src/components/Logout'
+
+   const config = buildConfig({
+     // ...
+     admin: {
+       components: {
+         logout: {
+   -       Button: MyComponent,
+   +       Button: '/src/components/Logout#MyComponent'
+         }
+       }
+     },
+   })
+   ```
+
+   For more details, see the [Documentation](/docs/v3/custom-components/overview.md#component-paths).
+
+1. All Custom Components are now server-rendered by default, and therefore, cannot use state or hooks directly. If you’re using Custom Components in your app that requires state or hooks, add the `'use client'` directive at the top of the file.
+
+   ```diff
+   // components/MyClientComponent.tsx
+   + 'use client'
+   import React, { useState } from 'react'
+
+   export const MyClientComponent = () => {
+     const [state, setState] = useState()
+
+     return (
+       <div>
+         {state}
+       </div>
+     )
+   }
+   ```
+
+   For more details, see the [Documentation](/docs/v3/custom-components/overview.md#client-components).
+
+1. The `admin.description` property within Collection, Globals, and Fields no longer accepts a React Component. Instead, you must define it as a Custom Component.
+
+   1. For Collections, use the `admin.components.edit.Description` key:
+
+   ```diff
+   // collections/Posts.ts
+   import type { CollectionConfig } from 'payload'
+   - import { MyCustomDescription } from '../components/MyCustomDescription'
+
+   export const PostsCollection: CollectionConfig = {
+     slug: 'posts',
+     admin: {
+   -    description: MyCustomDescription,
+   +    components: {
+   +      edit: {
+   +        Description: 'path/to/MyCustomDescription'
+   +      }
+   +    }
+     }
+   }
+   ```
+
+   2. For Globals, use the `admin.components.elements.Description` key:
+
+   ```diff
+   // globals/Site.ts
+   import type { GlobalConfig } from 'payload'
+   - import { MyCustomDescription } from '../components/MyCustomDescription'
+
+   export const SiteGlobal: GlobalConfig = {
+     slug: 'site',
+     admin: {
+   -    description: MyCustomDescription,
+   +    components: {
+   +      elements: {
+   +        Description: 'path/to/MyCustomDescription'
+   +      }
+   +    }
+     }
+   }
+   ```
+
+   3. For Fields, use the `admin.components.Description` key:
+
+   ```diff
+   // fields/MyField.ts
+   import type { FieldConfig } from 'payload'
+   - import { MyCustomDescription } from '../components/MyCustomDescription'
+
+   export const MyField: FieldConfig = {
+     type: 'text',
+     admin: {
+   -    description: MyCustomDescription,
+   +    components: {
+   +      Description: 'path/to/MyCustomDescription'
+   +    }
+     }
+   }
+   ```
+
+1. Array Field row labels and Collapsible Field label now _only_ accepts a React Component, and no longer accepts a plain string or record:
+
+   ```diff
+   // file: Collection.tsx
+   import type { CollectionConfig } from 'payload'
+   - import { MyCustomRowLabel } from './components/MyCustomRowLabel.tsx'
+
+   export const MyCollection: CollectionConfig = {
+     slug: 'my-collection',
+     fields: [
+       {
+         name: 'my-array',
+         type: 'array',
+         admin: {
+           components: {
+   -         RowLabel: 'My Array Row Label,
+   +         RowLabel: './components/RowLabel.ts'
+           }
+         },
+         fields: [...]
+       },
+       {
+         name: 'my-collapsible',
+         type: 'collapsible',
+         admin: {
+           components: {
+   -         Label: 'My Collapsible Label',
+   +         Label: './components/RowLabel.ts'
+           }
+         },
+         fields: [...]
+       }
+     ]
+   }
+   ```
+
+1. All default view keys are now camelcase:
+
+   For example, for Root Views:
+
+   ```diff
+   // file: payload.config.ts
+
+   import { buildConfig } from 'payload'
+
+   export default buildConfig({
+   admin: {
+     views: {
+   -    Account: ...
+   +    account: ...
+     }
+   })
+   ```
+
+   Or Document Views:
+
+   ```diff
+   // file: Collection.tsx
+
+   import type { CollectionConfig } from 'payload'
+
+   export const MyCollection: CollectionConfig = {
+     slug: 'my-collection',
+     admin: {
+       views: {
+   -     Edit: {
+   -       Default: ...
+   -     }
+   +     edit: {
+   +       default: ...
+   +     }
+       }
+     }
+   }
+   ```
+
+1. Custom Views within the config no longer accept React Components directly, instead, you must use their `Component` property:
+
+   ```diff
+   // file: Collection.tsx
+   import type { CollectionConfig } from 'payload'
+   - import { MyCustomView } from './components/MyCustomView.tsx'
+
+   export const MyCollection: CollectionConfig = {
+     slug: 'my-collection',
+     admin: {
+       views: {
+   -     Edit: MyCustomView
+   +     edit: {
+   +       Component: './components/MyCustomView.tsx'
+   +     }
+       }
+     }
+   }
+   ```
+
+   This also means that Custom Root Views are no longer defined on the `edit` key. Instead, use the new `views.root` key:
+
+   ```diff
+   // file: Collection.tsx
+   import type { CollectionConfig } from 'payload'
+   - import { MyCustomRootView } from './components/MyCustomRootView.tsx'
+
+   export const MyCollection: CollectionConfig = {
+     slug: 'my-collection',
+     admin: {
+       views: {
+   -     Edit: MyCustomRootView
+         edit: {
+   +       root: {
+   +         Component: './components/MyCustomRootView.tsx'
+   +       }
+         }
+       }
+     }
+   }
+   ```
+
+1. The `href` and `isActive` functions on View Tabs no longer includes the `match` or `location` arguments. This is is a property specific to React Router, not Next.js. If you need to do URL matching similar to this, use a custom tab that fires of some hooks, i.e. `usePathname()` and run it through your own utility functions:
+
+   ```diff
+   // collections/Posts.ts
+   import type { CollectionConfig } from 'payload'
+
+   export const PostsCollection: CollectionConfig = {
+     slug: 'posts',
+     admin: {
+       components: {
+         views: {
+   -        Edit: {
+   -          Tab: {
+   -            isActive: ({ href, location, match }) => true,
+   -            href: ({ href, location, match }) => ''
+   -          },
+   -       },
+   +       edit: {
+   +         tab: {
+   +           isActive: ({ href }) => true,
+   +           href: ({ href }) => '' // or use a Custom Component (see below)
+   +           // Component: './path/to/CustomComponent.tsx'
+   +         }
+   +       },
+         },
+       },
+     },
+   }
+   ```
+
+1. The `admin.components.views[key].Tab.pillLabel` has been replaced with `admin.components.views[key].tab.Pill`:
+
+   ```diff
+   // collections/Posts.ts
+   import type { CollectionConfig } from 'payload'
+
+   export const PostsCollection: CollectionConfig = {
+     slug: 'posts',
+     admin: {
+       components: {
+   -     views: {
+   -       Edit: {
+   -         Tab: {
+   -           pillLabel: 'Hello, world!',
+   -         },
+   -       },
+   +       edit: {
+   +         tab: {
+   +           Pill: './path/to/CustomPill.tsx',
+   +         }
+   +       },
+         },
+       },
+     },
+   }
+   ```
+
+1. `react-i18n` was removed, the `Trans` component from `react-i18n` has been replaced with a Payload-provided solution:
+
+   ```diff
+   'use client'
+   - import { Trans } from "react-i18n"
+   + import { Translation } from "@payloadcms/ui"
+
+   // Example string to translate:
+   // "loggedInChangePassword": "To change your password, go to your <0>account</0> and edit your password there."
+
+   export const MyComponent = () => {
+     return (
+   -     <Trans i18nKey="loggedInChangePassword" t={t}>
+   -       <Link to={`${admin}/account`}>account</Link>
+   -     </Trans>
+
+   +     <Translation
+   +       t={t}
+   +       i18nKey="authentication:loggedInChangePassword"
+   +       elements={{
+   +         '0': ({ children }) => <Link href={`${admin}/account`} children={children} />,
+   +       }}
+   +     />
+     )
+   }
+   ```
+
+## Endpoints
+
+1. All endpoint handlers have changed. The args no longer include `res`, and `next`, and the return type now expects a valid HTTP [`Response`](https://developer.mozilla.org/en-US/docs/Web/API/Response) instead of `res.json`, `res.send`, etc.:
+
+   ```diff
+   // collections/Posts.ts
+   import type { CollectionConfig } from 'payload'
+
+   export const PostsCollection: CollectionConfig = {
+     slug: 'posts',
+     endpoints: [
+   -   {
+   -     path: '/whoami/:parameter',
+   -     method: 'post',
+   -     handler: (req, res) => {
+   -       res.json({
+   -         parameter: req.params.parameter,
+   -         name: req.body.name,
+   -         age: req.body.age,
+   -       })
+   -     }
+   -   },
+   +   {
+   +     path: '/whoami/:parameter',
+   +     method: 'post',
+   +     handler: (req) => {
+   +       return Response.json({
+   +         parameter: req.routeParams.parameter,
+   +         // ^^ `params` is now `routeParams`
+   +         name: req.data.name,
+   +         age: req.data.age,
+   +       })
+   +     }
+   +   }
+     ]
+   }
+   ```
+
+1. Endpoint handlers no longer resolves `data`, `locale`, or `fallbackLocale` for you on the request. Instead, you must resolve them yourself or use the Payload-provided utilities:
+
+   ```diff
+   // collections/Posts.ts
+   import type { CollectionConfig } from 'payload'
+   + import { addDataAndFileToRequest } from '@payloadcms/next/utilities'
+   + import { addLocalesToRequest } from '@payloadcms/next/utilities'
+
+   export const PostsCollection: CollectionConfig = {
+     slug: 'posts',
+     endpoints: [
+   -   {
+   -     path: '/whoami/:parameter',
+   -     method: 'post',
+   -     handler: async (req) => {
+   -       return Response.json({
+   -         name: req.data.name, // data will be undefined
+   -       })
+   -     }
+   -   },
+   +   {
+   +     path: '/whoami/:parameter',
+   +     method: 'post',
+   +     handler: async (req) => {
+   +       // mutates req, must be awaited
+   +       await addDataAndFileToRequest(req)
+   +       await addLocalesToRequest(req)
+   +
+   +       return Response.json({
+   +         name: req.data.name, // data is now available
+   +    	    fallbackLocale: req.fallbackLocale,
+   +         locale: req.locale,
+   +       })
+   +     }
+   +   }
+     ]
+   }
+   ```
+
+## React Hooks
+
+1. The `useTitle` hook has been consolidated into the `useDocumentInfo` hook. Instead, you can get title directly from document info context:
+
+   ```diff
+   'use client'
+   - import { useTitle } from 'payload'
+   + import { useDocumentInfo } from '@payloadcms/ui'
+
+   export const MyComponent = () => {
+   - const title = useTitle()
+   + const { title } = useDocumentInfo()
+
+     // ...
+   }
+   ```
+
+1. The `useDocumentInfo` hook no longer returns `collection` or `global`. Instead, various properties of the config are passed, like `collectionSlug` and `globalSlug`. You can use these to access a client-side config, if needed, through the `useConfig` hook (see next bullet).
+
+   ```diff
+   'use client'
+   import { useDocumentInfo } from '@payloadcms/ui'
+
+   export const MyComponent = () => {
+     const {
+   -   collection,
+   -   global,
+   +   collectionSlug,
+   +   globalSlug
+     } = useDocumentInfo()
+
+     // ...
+   }
+   ```
+
+1. The `useConfig` hook now returns a `ClientConfig` and not a `SanitizedConfig`. This is because the config itself is not serializable and so it is not able to be thread through to the client. This means that all non-serializable props have been omitted from the Client Config, such as `db`, `bundler`, etc.
+
+   ```diff
+   'use client'
+   - import { useConfig } from 'payload'
+   + import { useConfig } from '@payloadcms/ui'
+
+   export const MyComponent = () => {
+   - const config = useConfig() // used to be a 'SanitizedConfig'
+   + const { config } = useConfig() // now is a 'ClientConfig'
+
+     // ...
+   }
+   ```
+
+   For more details, see the [Documentation](../admin/custom-components/overview#accessing-the-payload-config).
+
+1. The `useCollapsible` hook has had slight changes to its property names. `collapsed` is now `isCollapsed` and `withinCollapsible` is now `isWithinCollapsible`.
+
+   ```diff
+   'use client'
+   import { useCollapsible } from '@payloadcms/ui'
+
+   export const MyComponent = () => {
+   - const { collapsed, withinCollapsible } = useCollapsible()
+   + const { isCollapsed, isWithinCollapsible } = useCollapsible()
+   }
+   ```
+
+1. The `useTranslation` hook no longer takes any options, any translations using shorthand accessors will need to use the entire `group:key`
+
+   ```diff
+   'use client'
+   - import { useTranslation } from 'payload'
+   + import { useTranslation } from '@payloadcms/ui'
+
+   export const MyComponent = () => {
+   - const { i18n, t } = useTranslation('general')
+   + const { i18n, t } = useTranslation()
+
+   - return <p>{t('cancel')}</p>
+   + return <p>{t('general:cancel')}</p>
+   }
+   ```
+
+## Types
+
+1. The `Fields` type was renamed to `FormState` for improved semantics. If you were previously importing this type in your own application, simply change the import name:
+
+   ```diff
+   - import type { Fields } from 'payload'
+   + import type { FormState } from 'payload'
+   ```
+
+1. The `BlockField` and related types have been renamed to `BlocksField` for semantic accuracy.
+
+   ```diff
+   - import type { BlockField, BlockFieldProps } from 'payload'
+   + import type { BlocksField, BlocksFieldProps } from 'payload'
+   ```
+
+## Email Adapters
+
+Email functionality has been abstracted out into email adapters.
+
+- All existing nodemailer functionality was abstracted into the `@payloadcms/email-nodemailer` package
+- No longer configured with ethereal.email by default.
+- Ability to pass email into the `init` function has been removed.
+- Warning will be given on startup if email not configured. Any `sendEmail` call will simply log the To address and subject.
+- A Resend adapter is now also available via the `@payloadcms/email-resend` package.
+
+### If you used the default email configuration in 2.0 (nodemailer):
+
+```tsx
+// ❌ Before
+
+// via payload.init
+payload.init({
+  email: {
+    transport: someNodemailerTransport
+    fromName: 'hello',
+    fromAddress: 'hello@example.com',
+  },
+})
+// or via email in payload.config.ts
+export default buildConfig({
+  email: {
+    transport: someNodemailerTransport
+    fromName: 'hello',
+    fromAddress: 'hello@example.com',
+  },
+})
+
+// ✅ After
+
+// Using new nodemailer adapter package
+
+import { nodemailerAdapter } from '@payloadcms/email-nodemailer'
+
+export default buildConfig({
+  email: nodemailerAdapter() // This will be the old ethereal.email functionality
+})
+
+// or pass in transport
+
+export default buildConfig({
+  email: nodemailerAdapter({
+    defaultFromAddress: 'info@payloadcms.com',
+    defaultFromName: 'Payload',
+    transport: await nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: 587,
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    })
+  })
+})
+```
+
+### Removal of rate-limiting
+
+- Now only available if using custom server and using express or similar
+
+## Plugins
+
+1. _All_ plugins have been standardized to use _named exports_ (as opposed to default exports). Most also have a suffix of `Plugin` to make it clear what is being imported.
+
+   ```diff
+   - import seo from '@payloadcms/plugin-seo'
+   + import { seoPlugin } from '@payloadcms/plugin-seo'
+
+   - import stripePlugin from '@payloadcms/plugin-stripe'
+   + import { stripePlugin } from '@payloadcms/plugin-stripe'
+
+   // and so on for every plugin
+   ```
+
+## `@payloadcms/plugin-cloud-storage`
+
+- The adapters that are exported from `@payloadcms/plugin-cloud-storage` (ie. `@payloadcms/plugin-cloud-storage/s3`) package have been removed.
+- New _standalone_ packages have been created for each of the existing adapters. Please see the documentation for the one that you use.
+- `@payloadcms/plugin-cloud-storage` is still fully supported but should only to be used if you are providing a custom adapter that does not have a dedicated package.
+- If you have created a custom adapter, the type must now provide a `name` property.
+
+| Service              | Package                                                                      |
+| -------------------- | ---------------------------------------------------------------------------- |
+| Vercel Blob          | https://github.com/payloadcms/payload/tree/3.x/packages/storage-vercel-blob |
+| AWS S3               | https://github.com/payloadcms/payload/tree/3.x/packages/storage-s3          |
+| Azure                | https://github.com/payloadcms/payload/tree/3.x/packages/storage-azure       |
+| Google Cloud Storage | https://github.com/payloadcms/payload/tree/3.x/packages/storage-gcs         |
+
+```tsx
+// ❌ Before (required peer dependencies depending on adapter)
+
+import { cloudStorage } from '@payloadcms/plugin-cloud-storage'
+import { s3Adapter } from '@payloadcms/plugin-cloud-storage/s3'
+
+plugins: [
+    cloudStorage({
+      collections: {
+        media: {
+          adapter: s3Adapter({
+            bucket: process.env.S3_BUCKET,
+            config: {
+              credentials: {
+                accessKeyId: process.env.S3_ACCESS_KEY_ID,
+                secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
+              },
+              region: process.env.S3_REGION,
+            },
+          }),
+        },
+      },
+    }),
+  ],
+
+ // ✅ After
+
+ import { s3Storage } from '@payloadcms/storage-s3'
+
+ plugins: [
+    s3Storage({
+      collections: {
+        media: true,
+      },
+      bucket: process.env.S3_BUCKET,
+      config: {
+        credentials: {
+          accessKeyId: process.env.S3_ACCESS_KEY_ID,
+          secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
+        },
+        region: process.env.S3_REGION,
+      },
+    }),
+  ],
+```
+
+## `@payloadcms/plugin-form-builder`
+
+1. Field overrides for form and form submission collections now accept a function with a `defaultFields` inside the args instead of an array of config
+
+   ```diff
+   // payload.config.ts
+   import { buildConfig } from 'payload'
+   import { formBuilderPlugin } from '@payloadcms/plugin-form-builder'
+
+   const config = buildConfig({
+     // ...
+     plugins: formBuilderPlugin({
+   -   fields: [
+   -     {
+   -       name: 'custom',
+   -       type: 'text',
+   -     }
+   -   ],
+   +   fields: ({ defaultFields }) => {
+   +     return [
+   +       ...defaultFields,
+   +       {
+   +         name: 'custom',
+   +         type: 'text',
+   +       },
+   +     ]
+   +   }
+     })
+   })
+   ```
+
+## `@payloadcms/plugin-redirects`
+
+1. Field overrides for the redirects collection now accepts a function with a `defaultFields` inside the args instead of an array of config
+
+   ```diff
+   // payload.config.ts
+   import { buildConfig } from 'payload'
+   import { redirectsPlugin } from '@payloadcms/plugin-redirects'
+
+   const config = buildConfig({
+     // ...
+     plugins: redirectsPlugin({
+   -   fields: [
+   -     {
+   -       name: 'custom',
+   -       type: 'text',
+   -     }
+   -   ],
+   +   fields: ({ defaultFields }) => {
+   +     return [
+   +       ...defaultFields,
+   +       {
+   +         name: 'custom',
+   +         type: 'text',
+   +       },
+   +     ]
+   +   }
+     })
+   })
+   ```
+
+## `@payloadcms/richtext-lexical`
+
+If you have custom features for `@payloadcms/richtext-lexical` you will need to migrate your code to the new API. Read more about the new API in the [documentation](/docs/v3/rich-text/building-custom-features.md).
+
+## Reserved Field names
+
+Payload reserves certain field names for internal use. Using any of the following names in your collections or globals will result in those fields being sanitized from the config, which can cause deployment errors. Ensure that any conflicting fields are renamed before migrating.
+
+### General Reserved Names
+
+- `file`
+- `_id` (MongoDB only)
+- `__v` (MongoDB only)
+
+**Important Note**: It is recommended to avoid using field names with an underscore (`_`) prefix unless explicitly required by a plugin. Payload uses this prefix for internal columns, which can lead to conflicts in certain SQL conditions. The following are examples of reserved internal columns (this list is not exhaustive and other internal fields may also apply):
+
+- `_order`
+- `_path`
+- `_uuid`
+- `_parent_id`
+- `_locale`
+
+### Auth-Related Reserved Names
+
+These are restricted if your collection uses `auth: true` and does not have `disableAuthStrategy: true`:
+
+- `salt`
+- `hash`
+- `apiKey` (when `auth.useAPIKey: true` is enabled)
+- `useAPIKey` (when `auth.useAPIKey: true` is enabled)
+- `resetPasswordToken`
+- `resetPasswordExpiration`
+- `password`
+- `email`
+- `username`
+
+### Upload-Related Reserved Names
+
+These apply if your collection has `upload: true` configured:
+
+- `filename`
+- `mimetype`
+- `filesize`
+- `width`
+- `height`
+- `focalX`
+- `focalY`
+- `url`
+- `thumbnailURL`
+
+If `imageSizes` is configured, the following are also reserved:
+
+- `sizes`
+
+If any of these names are found in your collection / global fields, update them before migrating to avoid unexpected issues.
+
+## Upgrade from previous beta
+
+Reference this [community-made site](https://payload-releases-filter.vercel.app/?version=3&from=152429656&to=188243150&sort=asc&breaking=on). Set your version, sort by oldest first, enable breaking changes only.
+
+Then go through each one of the breaking changes and make the adjustments. You can optionally reference the [blank template](https://github.com/payloadcms/payload/tree/3.x/templates/blank) for how things should end up.
 
 # The Payload Config
 
@@ -21137,36 +22308,79 @@ The `@payloadcms/ui` package contains the React components used throughout the P
 
 Each component guide includes working examples for the selected version of Payload, common props, accessibility guidance, and any providers or setup the component requires.
 
-## Components
+### Actions & navigation
 
-- [AnimateHeight](/docs/v3/ui-components/animate-height.md): Animate a container as its content changes height.
-- [Banner](/docs/v3/ui-components/banner.md): Display contextual notices, warnings, and errors.
+Trigger actions and help users move through custom Admin Panel interfaces.
+
 - [Button](/docs/v3/ui-components/button.md): Trigger actions with Payload's standard button styles.
-- [Card](/docs/v3/ui-components/card.md): Present content in a clickable or navigable card.
-- [CodeEditor](/docs/v3/ui-components/code-editor.md): Display and edit code with Payload's Monaco-based editor.
-- [Collapsible](/docs/v3/ui-components/collapsible.md): Show and hide a section beneath a collapsible header.
 - [CopyToClipboard](/docs/v3/ui-components/copy-to-clipboard.md): Copy text to the clipboard with built-in feedback.
-- [DatePicker](/docs/v3/ui-components/date-picker.md): Select calendar dates and times.
-- [Dropzone](/docs/v3/ui-components/dropzone.md): Accept files through drag, drop, and paste interactions.
-- [ErrorPill](/docs/v3/ui-components/error-pill.md): Show a compact validation or error indicator.
-- [Gutter](/docs/v3/ui-components/gutter.md): Align content with the Admin Panel's responsive gutters.
 - [Hamburger](/docs/v3/ui-components/hamburger.md): Render Payload's animated menu toggle.
 - [Link](/docs/v3/ui-components/link.md): Navigate with Payload's router-aware link.
-- [List and Pagination Controls](/docs/v3/ui-components/list-and-pagination-controls.md): Add pagination, sorting, and selection to Admin lists.
-- [Modals and Drawers](/docs/v3/ui-components/modals-and-drawers.md): Present focused actions and supporting content in overlays.
-- [Motion and Loading](/docs/v3/ui-components/motion-and-loading.md): Communicate loading and animate layout changes.
 - [Navigation Controls](/docs/v3/ui-components/navigation-controls.md): Compose Admin menu and step navigation controls.
-- [Pill](/docs/v3/ui-components/pill.md): Display compact metadata, statuses, and actions.
+- [Step Navigation](/docs/v3/ui-components/step-navigation.md): Set the Admin header breadcrumbs from a Custom View.
+
+### Inputs & selection
+
+Collect, edit, search, and select values with Admin-styled controls.
+
+- [CodeEditor](/docs/v3/ui-components/code-editor.md): Display and edit code with Payload's Monaco-based editor.
+- [DatePicker](/docs/v3/ui-components/date-picker.md): Select calendar dates and times.
+- [Field Labels and Messages](/docs/v3/ui-components/field-labels-and-messages.md): Add labels, descriptions, and validation messages to custom fields.
+- [Text Inputs](/docs/v3/ui-components/text-inputs.md): Build custom text and textarea field controls.
+- [Checkbox and Select Inputs](/docs/v3/ui-components/checkbox-and-select-inputs.md): Collect boolean and option values with Payload field controls.
 - [PillSelector](/docs/v3/ui-components/pill-selector.md): Choose from a compact group of pill-shaped options.
-- [Popup and PopupList](/docs/v3/ui-components/popup.md): Build contextual menus and lists of actions.
 - [ReactSelect and Select](/docs/v3/ui-components/react-select.md): Add select inputs styled for the Payload Admin Panel.
+- [Relationship and Upload Inputs](/docs/v3/ui-components/relationship-and-upload-inputs.md): Select related documents and media from custom fields.
 - [SearchBar](/docs/v3/ui-components/search-filter.md): Filter content with a complete, debounced search control.
-- [ShimmerEffect](/docs/v3/ui-components/shimmer-effect.md): Show a loading placeholder while content resolves.
-- [Table](/docs/v3/ui-components/table.md): Display rows with Payload's responsive table styles.
-- [Thumbnail](/docs/v3/ui-components/thumbnail.md): Render media thumbnails with file-type fallbacks.
 - [TimezonePicker](/docs/v3/ui-components/timezone-picker.md): Select from a configured list of timezones.
+
+### Layout & structure
+
+Arrange content and create expandable, responsive interface sections.
+
+- [AnimateHeight](/docs/v3/ui-components/animate-height.md): Animate a container as its content changes height.
+- [Card](/docs/v3/ui-components/card.md): Present content in a clickable or navigable card.
+- [Collapsible](/docs/v3/ui-components/collapsible.md): Show and hide a section beneath a collapsible header.
+- [Gutter](/docs/v3/ui-components/gutter.md): Align content with the Admin Panel's responsive gutters.
+
+### Feedback & status
+
+Communicate outcomes, validation, loading states, and contextual information.
+
+- [Banner](/docs/v3/ui-components/banner.md): Display contextual notices, warnings, and errors.
+- [ErrorPill](/docs/v3/ui-components/error-pill.md): Show a compact validation or error indicator.
+- [Motion and Loading](/docs/v3/ui-components/motion-and-loading.md): Communicate loading and animate layout changes.
+- [Pill](/docs/v3/ui-components/pill.md): Display compact metadata, statuses, and actions.
+- [ShimmerEffect](/docs/v3/ui-components/shimmer-effect.md): Show a loading placeholder while content resolves.
+
+### Data display & lists
+
+Present structured data, media, and collection controls.
+
+- [Icons](/docs/v3/ui-components/icons.md): Use Payload's interface icons in custom Admin Panel UI.
+- [List and Pagination Controls](/docs/v3/ui-components/list-and-pagination-controls.md): Add pagination, sorting, and selection to Admin lists.
+- [Table](/docs/v3/ui-components/table.md): Display rows with Payload's responsive table styles.
+- [Table Cells](/docs/v3/ui-components/table-cells.md): Render field values and build purpose-specific table cells.
+- [Thumbnail](/docs/v3/ui-components/thumbnail.md): Render media thumbnails with file-type fallbacks.
+
+### Interaction & overlays
+
+Build reorderable interfaces and contextual layers for focused interactions.
+
+- [Draggable Sortable](/docs/v3/ui-components/draggable-sortable.md): Reorder custom interface content with pointer and keyboard controls.
+- [Modals and Drawers](/docs/v3/ui-components/modals-and-drawers.md): Present focused actions and supporting content in overlays.
+- [Popup and PopupList](/docs/v3/ui-components/popup.md): Build contextual menus and lists of actions.
 - [Tooltip](/docs/v3/ui-components/tooltip.md): Provide contextual labels on hover or focus.
+
+### Documents & uploads
+
+Extend document editing and upload-enabled Collection workflows.
+
+- [Document Actions](/docs/v3/ui-components/document-actions.md): Save, publish, and perform bulk operations with Admin-aware controls.
+- [Document State](/docs/v3/ui-components/document-state.md): Handle document locks, takeovers, and unsaved changes.
+- [Dropzone](/docs/v3/ui-components/dropzone.md): Accept files through drag, drop, and paste interactions.
 - [Upload](/docs/v3/ui-components/upload.md): Extend upload-enabled Collection file workflows.
+- [Upload Helpers](/docs/v3/ui-components/upload-helpers.md): Display file details, generated sizes, and image adjustments.
 
 > **Warning**
 >
@@ -21928,6 +23142,493 @@ These are the props most commonly used with this component. See its exported typ
 | `readOnly`         | `boolean`                                                             | `false`     | Prevents the value from being changed.           |
 | `overrides`        | `ReactDatePickerProps`                                                | —           | Passes supported options to `react-datepicker`.  |
 
+# Document Actions
+
+Source: https://payloadcms.com/docs/ui-components/document-actions
+
+Payload's document action components connect standard Admin controls to the current form, document, permissions, and selection state. Use them inside the corresponding Edit or List View rather than as general-purpose buttons.
+
+## Import
+
+```tsx
+import {
+  DeleteMany,
+  EditMany,
+  PublishButton,
+  PublishMany,
+  PreviewButton,
+  SaveButton,
+  SaveDraftButton,
+  UnpublishButton,
+  UnpublishMany,
+} from '@payloadcms/ui'
+```
+
+## Save
+
+When drafts are disabled, `SaveButton` submits the current document form. It is disabled while an upload is in progress and, when editing an existing document, until the form has been modified.
+
+**Implementation**
+
+```tsx
+<SaveButton />
+```
+
+**Styling**
+
+Use the Save action ID together with its Button style class when the document Save control needs treatment distinct from other primary Admin buttons.
+
+```css
+#action-save.btn--style-primary {
+  --bg-color: #6d5dfc;
+  --color: #ffffff;
+  --hover-bg: #5947e5;
+  --hover-color: #ffffff;
+}
+```
+
+- `--bg-color`: Save action background.
+- `--color`: Save action label color.
+- `--hover-bg`: Save action background on interaction.
+- `--hover-color`: Save action label color on interaction.
+
+Pass `label` to `SaveButton` when a replacement component needs a more specific action label.
+
+## Draft and publish actions
+
+When drafts are enabled, Payload uses `SaveDraftButton` and `PublishButton` instead of `SaveButton`. Saving a draft skips validation; publishing submits the document with a published status.
+
+**Implementation**
+
+```tsx
+<SaveDraftButton />
+<PublishButton />
+```
+
+**Styling**
+
+Use the stable action IDs together with Button style classes when Save and Publish controls need treatment distinct from other Admin buttons.
+
+```css
+#action-save-draft.btn--style-secondary {
+  --color: #6d5dfc;
+  --btn-border: 1px solid #6d5dfc;
+  --hover-color: #5947e5;
+  --hover-btn-border: 1px solid #5947e5;
+}
+
+#action-publish.btn--style-primary {
+  --bg-color: #6d5dfc;
+  --color: #ffffff;
+  --hover-bg: #5947e5;
+  --hover-color: #ffffff;
+}
+```
+
+- `--bg-color`: Primary action background.
+- `--color`: Action label color.
+- `--hover-bg`: Primary action background on interaction.
+- `--btn-border`: Secondary action border.
+- `--hover-btn-border`: Secondary action border on interaction.
+
+`UnpublishButton` appears in the document action menu when the current user can publish, the document is published, and drafts are enabled. It opens a confirmation modal before changing the document back to draft status.
+
+`PreviewButton` opens the current document's configured preview URL in a new tab. It only renders when the Edit View's live preview context contains a URL.
+
+Use these components when replacing the equivalent Edit View control. The surrounding Edit View supplies their form, document information, operation, locale, translation, and modal contexts.
+
+```ts
+export const Posts = {
+  slug: 'posts',
+  admin: {
+    components: {
+      edit: {
+        SaveDraftButton: '/components/CustomSaveDraftButton',
+        PublishButton: '/components/CustomPublishButton',
+        UnpublishButton: '/components/CustomUnpublishButton',
+      },
+    },
+  },
+}
+```
+
+See [Edit View Custom Components](/docs/v3/custom-components/edit-view.md) for all Collection and Global replacement slots and their server and client prop types.
+
+## Bulk List View actions
+
+The bulk action components operate on the documents selected in the current List View.
+
+**Implementation**
+
+```tsx
+<EditMany collection={collection} />
+<PublishMany collection={collection} />
+<UnpublishMany collection={collection} />
+<DeleteMany collection={collection} />
+```
+
+**Styling**
+
+Bulk actions share the ListSelection button treatment. Override that class to customize selection actions without changing standard Buttons.
+
+```css
+.list-selection__button {
+  color: #6d5dfc;
+  font-weight: 600;
+}
+
+.list-selection__button:hover,
+.list-selection__button:focus-visible {
+  color: #5947e5;
+  text-decoration: underline;
+}
+```
+
+- `color`: Bulk action label color.
+- `font-weight`: Bulk action label emphasis.
+- `text-decoration`: Interaction feedback for bulk actions.
+
+Each component receives the current Collection's client configuration. Selection and authentication providers determine whether the action is visible and which documents it affects. `PublishMany` and `UnpublishMany` only render for Collections with drafts enabled.
+
+These controls are intended for List View composition. They do not create selection state when rendered elsewhere.
+
+## Behavior and visibility
+
+| Component         | Context   | When it is used                                                |
+| ----------------- | --------- | -------------------------------------------------------------- |
+| `SaveButton`      | Edit View | Saves a document when drafts are disabled.                     |
+| `SaveDraftButton` | Edit View | Saves a draft without requiring the form to pass validation.   |
+| `PublishButton`   | Edit View | Publishes the current document when drafts are enabled.        |
+| `UnpublishButton` | Edit View | Returns a published document to draft status after confirming. |
+| `PreviewButton`   | Edit View | Opens the configured document preview in a new tab.            |
+| `EditMany`        | List View | Opens the bulk-edit workflow for selected documents.           |
+| `PublishMany`     | List View | Publishes selected documents.                                  |
+| `UnpublishMany`   | List View | Unpublishes selected documents.                                |
+| `DeleteMany`      | List View | Trashes or permanently deletes selected documents.             |
+
+## Accessibility
+
+- Keep replacement labels action-oriented and specific to the operation.
+- Preserve the built-in confirmation step for destructive or difficult-to-reverse actions.
+- Do not force an action to remain visible when Payload hides it because of permissions or document state.
+- Keep custom action order consistent with the surrounding Edit or List View.
+
+## Provider requirements
+
+These components depend on providers supplied by the Payload Admin Panel. Edit actions require the current form and document contexts. Bulk actions require the current Collection, selection, authentication, and List View contexts. Use [`Button`](/docs/v3/ui-components/button.md) for actions that do not need this behavior.
+
+# Document State
+
+Source: https://payloadcms.com/docs/ui-components/document-state
+
+Payload's document state components communicate editing conflicts and protect users from losing work. The Admin Panel renders these states automatically during its standard document workflow; use the exports when composing or replacing an Edit View experience.
+
+## Import
+
+```tsx
+import {
+  DocumentLocked,
+  DocumentTakeOver,
+  LeaveWithoutSaving,
+  Locked,
+} from '@payloadcms/ui'
+```
+
+## Lock indicator
+
+`Locked` displays the compact lock icon used when another user is editing a document. Its tooltip identifies that user when their email or ID is available.
+
+**Implementation**
+
+```tsx
+<Locked user={lockingUser} />
+```
+
+**Styling**
+
+Style the compact Locked indicator directly while preserving its built-in editor tooltip.
+
+```css
+.locked {
+  color: #6d5dfc;
+  background: #f3f1ff;
+  border: 1px solid #c8c0ff;
+  border-radius: 999px;
+  padding: 0.35rem;
+}
+```
+
+- `color`: Lock icon color.
+- `background`: Indicator surface.
+- `border`: Indicator outline.
+- `padding`: Clickable area around the lock icon.
+
+## Locked document
+
+`DocumentLocked` interrupts editing and gives the user three appropriate paths: return to the previous view, inspect the document without editing, or take over editing.
+
+**Implementation**
+
+```tsx
+<DocumentLocked
+  handleGoBack={() => router.back()}
+  isActive={isLocked}
+  onReadOnly={() => setReadOnly(true)}
+  onTakeOver={takeOverDocument}
+  updatedAt={lockedAt}
+  user={lockingUser}
+/>
+```
+
+**Styling**
+
+Target each document-state surface and its inner wrapper to customize the interruption without changing its permission or navigation behavior.
+
+```css
+.document-locked,
+.document-take-over {
+  background: rgb(255 255 255 / 88%);
+  backdrop-filter: blur(8px);
+}
+
+.document-locked__wrapper,
+.document-take-over__wrapper {
+  border: 1px solid #c8c0ff;
+  border-radius: 8px;
+}
+```
+
+- `background`: Surface displayed over the interrupted Edit View.
+- `backdrop-filter`: Visual separation from the underlying document.
+- `border`: Optional outline around the state message.
+- `border-radius`: State message corner radius.
+
+The component opens while `isActive` is true. Supply callbacks for each navigation or takeover outcome; the component coordinates its own modal visibility and clears Payload's route cache when required.
+
+## Editing taken over
+
+`DocumentTakeOver` is shown to the previous editor after another user takes control of the document. It lets them return to the dashboard or continue in read-only mode.
+
+**Implementation**
+
+```tsx
+<DocumentTakeOver
+  handleBackToDashboard={() => router.push('/admin')}
+  isActive={hasLostEditAccess}
+  onReadOnly={() => setReadOnly(true)}
+/>
+```
+
+**Styling**
+
+Target each document-state surface and its inner wrapper to customize the interruption without changing its permission or navigation behavior.
+
+```css
+.document-locked,
+.document-take-over {
+  background: rgb(255 255 255 / 88%);
+  backdrop-filter: blur(8px);
+}
+
+.document-locked__wrapper,
+.document-take-over__wrapper {
+  border: 1px solid #c8c0ff;
+  border-radius: 8px;
+}
+```
+
+- `background`: Surface displayed over the interrupted Edit View.
+- `backdrop-filter`: Visual separation from the underlying document.
+- `border`: Optional outline around the state message.
+- `border-radius`: State message corner radius.
+
+## Unsaved changes
+
+`LeaveWithoutSaving` watches the current document form and opens a confirmation modal when an authenticated user attempts to navigate away from modified or invalid content.
+
+```tsx
+<LeaveWithoutSaving
+  onConfirm={() => {
+    analytics.track('Left document with unsaved changes')
+  }}
+/>
+```
+
+Set `disablePreventLeave` when another part of a custom workflow temporarily owns navigation. Use `onPrevent` to observe the attempted destination and `onConfirm` for work that must happen after the user accepts leaving.
+
+## Common props
+
+These are the props most commonly used with this component family. See the exported types in `@payloadcms/ui` for the complete list.
+
+### Locked
+
+| Prop        | Type         | Default | Description                                 |
+| ----------- | ------------ | ------- | ------------------------------------------- |
+| `user` \*   | `ClientUser` | —       | Identifies the user currently editing.      |
+| `className` | `string`     | —       | Adds a class to the lock indicator wrapper. |
+
+### DocumentLocked
+
+| Prop              | Type                             | Default | Description                                     |
+| ----------------- | -------------------------------- | ------- | ----------------------------------------------- |
+| `isActive` \*     | `boolean`                        | —       | Opens or closes the locked-document modal.      |
+| `handleGoBack` \* | `() => void`                     | —       | Returns the user to the previous safe location. |
+| `onReadOnly` \*   | `() => void`                     | —       | Switches the document into read-only mode.      |
+| `onTakeOver` \*   | `() => void`                     | —       | Takes control of editing the document.          |
+| `updatedAt`       | `number \| null`                 | —       | Displays the locking editor's last activity.    |
+| `user`            | `ClientUser \| string \| number` | —       | Identifies the locking user.                    |
+
+### DocumentTakeOver
+
+| Prop                       | Type         | Default | Description                                    |
+| -------------------------- | ------------ | ------- | ---------------------------------------------- |
+| `isActive` \*              | `boolean`    | —       | Opens or closes the takeover modal.            |
+| `handleBackToDashboard` \* | `() => void` | —       | Returns the previous editor to the dashboard.  |
+| `onReadOnly` \*            | `() => void` | —       | Continues with the document in read-only mode. |
+
+_\* An asterisk denotes that a prop is required._
+
+## Accessibility
+
+- Preserve the built-in modal focus management when composing conflict states.
+- Identify the other editor when that information can be shown safely.
+- Keep read-only and takeover actions explicit; they have meaning beyond ordinary navigation.
+- Do not rely on the lock icon alone when the editing conflict needs an explanation.
+
+## Provider requirements
+
+These components depend on the document, form, authentication, translation, modal, route-cache, and route-transition contexts supplied by the Admin Panel. They are intended for Custom Components rendered within Payload's document workflow, not standalone application status messages.
+
+# Draggable Sortable
+
+Source: https://payloadcms.com/docs/ui-components/draggable-sortable
+
+Use `DraggableSortable` with `DraggableSortableItem` to add pointer, touch, and keyboard reordering to custom Admin Panel interfaces.
+
+## Import
+
+```tsx
+import { DraggableSortable, DraggableSortableItem } from '@payloadcms/ui'
+```
+
+## Basic usage
+
+**Implementation**
+
+```tsx
+'use client'
+
+import {
+  Button,
+  DraggableSortable,
+  DraggableSortableItem,
+  DragHandleIcon,
+} from '@payloadcms/ui'
+import { useState } from 'react'
+
+const initialItems = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'details', label: 'Details' },
+  { id: 'settings', label: 'Settings' },
+]
+
+const moveItem = (items, moveFromIndex, moveToIndex) => {
+  const nextItems = [...items]
+  const [movedItem] = nextItems.splice(moveFromIndex, 1)
+  nextItems.splice(moveToIndex, 0, movedItem)
+  return nextItems
+}
+
+export function SortableList() {
+  const [items, setItems] = useState(initialItems)
+
+  return (
+    <DraggableSortable
+      ids={items.map(({ id }) => id)}
+      onDragEnd={({ moveFromIndex, moveToIndex }) => {
+        setItems((current) => moveItem(current, moveFromIndex, moveToIndex))
+      }}
+    >
+      {items.map(({ id, label }) => (
+        <DraggableSortableItem id={id} key={id}>
+          {({ attributes, isDragging, listeners, setNodeRef, transform, transition }) => (
+            <div
+              ref={setNodeRef}
+              style={{ opacity: isDragging ? 0.6 : 1, transform, transition }}
+            >
+              <span>{label}</span>
+              <Button
+                aria-label={`Reorder ${label}`}
+                buttonStyle="icon-label"
+                extraButtonProps={{ ...attributes, ...listeners }}
+                icon={<DragHandleIcon />}
+                margin={false}
+              />
+            </div>
+          )}
+        </DraggableSortableItem>
+      ))}
+    </DraggableSortable>
+  )
+}
+```
+
+**Styling**
+
+Style the list and row wrappers while leaving the drag transform and transition inline on each item. Payload theme variables keep the surface consistent across light and dark modes.
+
+```css
+.sortable-list {
+  display: grid;
+  gap: calc(var(--base) / 2);
+}
+
+.sortable-item {
+  align-items: center;
+  background: var(--theme-elevation-50);
+  border: 1px solid var(--theme-elevation-200);
+  display: flex;
+  justify-content: space-between;
+  padding: calc(var(--base) / 2) var(--base);
+}
+```
+
+- `--theme-elevation-50`: Sortable item background.
+- `--theme-elevation-200`: Sortable item border.
+- `--base`: Spacing within and between items.
+
+`DraggableSortable` coordinates the list and reports the original and destination indexes through `onDragEnd`. Your component remains responsible for updating local state and persisting the new order when necessary.
+
+Each `DraggableSortableItem` exposes the attributes, listeners, ref, transform, and transition needed to render an item. Apply the listeners to a visible drag handle so the rest of the row can retain its own interactions.
+
+## DraggableSortable props
+
+| Prop          | Type                                              | Description                                    |
+| ------------- | ------------------------------------------------- | ---------------------------------------------- |
+| `children*`   | `ReactNode`                                       | Renders the sortable items.                    |
+| `ids*`        | `string[]`                                        | Lists item IDs in their current display order. |
+| `onDragEnd*`  | `({ moveFromIndex, moveToIndex, event }) => void` | Handles a completed reorder.                   |
+| `onDragStart` | `({ id, event }) => void`                         | Handles the beginning of a drag.               |
+| `className`   | `string`                                          | Adds a class to the sortable list container.   |
+
+## DraggableSortableItem props
+
+| Prop        | Type                           | Description                                                 |
+| ----------- | ------------------------------ | ----------------------------------------------------------- |
+| `id*`       | `string`                       | Matches an entry in the parent `ids` array.                 |
+| `children*` | `(sortableState) => ReactNode` | Renders the item with its drag attributes and visual state. |
+| `disabled`  | `boolean`                      | Prevents the item from being reordered.                     |
+
+_\* An asterisk denotes that a prop is required._
+
+## Accessibility
+
+- Put the supplied attributes and listeners on a keyboard-focusable drag handle.
+- Give the handle an accessible name that identifies the item it moves.
+- Persist the resulting order only after `onDragEnd` supplies a valid destination.
+
+These components configure their own drag-and-drop context and require no Payload providers.
+
 # Dropzone
 
 Source: https://payloadcms.com/docs/ui-components/dropzone
@@ -21994,6 +23695,8 @@ Target the base Dropzone and its dragging state to create a branded upload area 
 
 `Dropzone` does not render a file input or open the system file picker. Render those controls as children when users should be able to browse for files in addition to dropping them.
 
+It also has no awareness of Collections or existing documents, so controls such as **Create New** and **Choose from existing** must come from the surrounding field interface.
+
 When `multipleFiles` is disabled, dropping more than one file passes only the first file to `onChange`.
 
 ## Common props
@@ -22010,6 +23713,562 @@ These are the props most commonly used with this component. See its exported typ
 | `className`     | `string`                    | —           | Adds a class to the dropzone container.            |
 
 _\* An asterisk denotes that a prop is required._
+
+# Field Labels and Messages
+
+Source: https://payloadcms.com/docs/ui-components/field-labels-and-messages
+
+`FieldLabel`, `FieldDescription`, and `FieldError` provide the supporting text and validation treatment used around inputs in the Payload Admin Panel. Use them when a Custom Field needs to match Payload's field structure without rendering one of the complete field components.
+
+## Import
+
+```tsx
+import { FieldDescription, FieldError, FieldLabel } from '@payloadcms/ui'
+```
+
+## Labels
+
+**Implementation**
+
+```tsx
+<div className="field-type text">
+  <FieldLabel
+    htmlFor="project-name"
+    label="Project name"
+    required
+  />
+  <div className="field-type__wrap">
+    <input
+      aria-label="Project name"
+      defaultValue="Payload website"
+      id="project-name"
+      type="text"
+    />
+  </div>
+</div>
+```
+
+**Styling**
+
+Style the shared FieldLabel class and its required marker to keep custom inputs aligned with the rest of the Admin Panel.
+
+```css
+.field-label {
+  color: var(--theme-text);
+  font-weight: 600;
+}
+
+.field-label .required {
+  color: var(--theme-error-500);
+}
+```
+
+- `color`: Label and required-marker color.
+- `font-weight`: Label emphasis.
+
+This example places `FieldLabel` above a native input to show how it fits into a complete Custom Field. Connect the label to its input with `htmlFor`. When `htmlFor` is omitted, `FieldLabel` can derive the matching field ID from `path` inside Payload's form context.
+
+## Descriptions and errors
+
+**Implementation**
+
+```tsx
+<div className="field-type text error">
+  <FieldLabel
+    htmlFor="project-slug"
+    label="Project slug"
+    required
+  />
+  <div className="field-type__wrap">
+    <FieldError
+      message="This field is required."
+      path="projectSlug"
+      showError
+    />
+    <input
+      aria-invalid="true"
+      aria-label="Project slug"
+      id="project-slug"
+      type="text"
+    />
+    <FieldDescription
+      description="Use a short, recognizable slug for this project."
+      path="projectSlug"
+    />
+  </div>
+</div>
+```
+
+**Styling**
+
+Customize helper and validation messages through their shared classes while preserving the visibility behavior controlled by the field state.
+
+```css
+.field-description {
+  color: var(--theme-elevation-600);
+  font-size: 0.875rem;
+}
+
+.field-error.tooltip {
+  background: var(--theme-error-500);
+  color: var(--theme-elevation-0);
+}
+```
+
+- `background`: Validation tooltip surface.
+- `color`: Helper or validation text color.
+- `font-size`: Helper text size.
+
+`FieldDescription` renders helper text below the control, while `FieldError` positions validation feedback against the same field. `FieldError` can receive `message` and `showError` directly, or read the current message and submitted state from Payload's form context.
+
+## Common props
+
+### FieldLabel
+
+| Prop         | Type                        | Default   | Description                                       |
+| ------------ | --------------------------- | --------- | ------------------------------------------------- |
+| `label`      | `StaticLabel`               | —         | Supplies the translated visible label.            |
+| `htmlFor`    | `string`                    | Generated | Associates the label with an input.               |
+| `path`       | `string`                    | —         | Generates the input ID when `htmlFor` is omitted. |
+| `required`   | `boolean`                   | `false`   | Displays Payload's required marker.               |
+| `localized`  | `boolean`                   | `false`   | Displays the active locale beside the label.      |
+| `hideLocale` | `boolean`                   | `false`   | Hides the active locale label.                    |
+| `as`         | `'h3' \| 'label' \| 'span'` | `'label'` | Changes the rendered element.                     |
+| `unstyled`   | `boolean`                   | `false`   | Removes Payload's label presentation.             |
+
+### FieldDescription
+
+| Prop              | Type                | Default | Description                                   |
+| ----------------- | ------------------- | ------- | --------------------------------------------- |
+| `description`     | `StaticDescription` | —       | Supplies translated helper content.           |
+| `path` \*         | `string`            | —       | Adds the field-specific description class.    |
+| `className`       | `string`            | —       | Adds a custom class.                          |
+| `marginPlacement` | `'bottom' \| 'top'` | —       | Applies Payload's standard description space. |
+
+### FieldError
+
+| Prop         | Type                            | Default   | Description                                |
+| ------------ | ------------------------------- | --------- | ------------------------------------------ |
+| `path`       | `string`                        | —         | Reads validation state for this form path. |
+| `message`    | `string`                        | Form      | Overrides the message from form state.     |
+| `showError`  | `boolean`                       | Form      | Forces the validation message to render.   |
+| `alignCaret` | `'center' \| 'left' \| 'right'` | `'right'` | Positions the validation tooltip caret.    |
+
+_\* An asterisk denotes that a prop is required._
+
+## Accessibility
+
+- Associate visible labels with their inputs.
+- Use descriptions for guidance, not essential validation errors.
+- Keep validation messages specific and explain how to correct the value.
+- Preserve `aria-describedby` and error associations when composing a complete custom input.
+
+## Provider requirements
+
+These components use Payload's translation context. `FieldLabel` can also read form, locale, and edit-depth context, while `FieldError` reads form validation state when explicit values are not supplied. Those providers are already present inside Admin Panel Custom Components.
+
+# Text Inputs
+
+Source: https://payloadcms.com/docs/ui-components/text-inputs
+
+`TextInput` and `TextareaInput` combine native text controls with Payload's label, description, validation, and read-only field presentation. Use them when building a Custom Field that manages its own value.
+
+## Import
+
+```tsx
+import { TextareaInput, TextInput } from '@payloadcms/ui'
+```
+
+## TextInput
+
+**Implementation**
+
+```tsx
+const [value, setValue] = useState('Quarterly report')
+
+<TextInput
+  description="Displayed as the document title."
+  label="Title"
+  onChange={(event) => setValue(event.target.value)}
+  path="title"
+  required
+  value={value}
+/>
+```
+
+**Styling**
+
+Target the TextInput field wrapper and native input to customize its surface, outline, and focus treatment.
+
+```css
+.field-type.text input {
+  background: var(--theme-input-bg);
+  border: 1px solid var(--theme-elevation-250);
+  border-radius: 6px;
+}
+
+.field-type.text input:focus {
+  border-color: var(--theme-elevation-500);
+}
+```
+
+- `--theme-input-bg`: Input surface inherited from the theme.
+- `border`: Input outline.
+- `border-radius`: Input corner radius.
+
+`TextInput` is controlled. Pass the current string through `value` and update it from the native change event.
+
+Set `hasMany` to render Payload's sortable multi-value text control instead of a native input.
+
+## TextareaInput
+
+**Implementation**
+
+```tsx
+const [value, setValue] = useState(
+  'A concise summary for the project dashboard.',
+)
+
+<TextareaInput
+  description="Keep the summary brief and useful."
+  label="Summary"
+  onChange={(event) => setValue(event.target.value)}
+  path="summary"
+  rows={4}
+  value={value}
+/>
+```
+
+**Styling**
+
+Style the native textarea inside Payload’s field wrapper while retaining its label, description, and validation layout.
+
+```css
+.field-type.textarea textarea {
+  background: var(--theme-input-bg);
+  border: 1px solid var(--theme-elevation-250);
+  border-radius: 6px;
+  resize: vertical;
+}
+
+.field-type.textarea textarea:focus {
+  border-color: var(--theme-elevation-500);
+}
+```
+
+- `--theme-input-bg`: Textarea surface inherited from the theme.
+- `border`: Textarea outline.
+- `border-radius`: Textarea corner radius.
+- `resize`: Allowed manual resize direction.
+
+Use `rows` to establish the initial height. The value remains controlled by the surrounding Custom Field.
+
+## Common props
+
+These props are shared by both inputs unless noted otherwise.
+
+| Prop          | Type                      | Default | Description                                    |
+| ------------- | ------------------------- | ------- | ---------------------------------------------- |
+| `path` \*     | `string`                  | —       | Identifies the field and connects its UI.      |
+| `value`       | `string`                  | `''`    | Supplies the controlled value.                 |
+| `onChange`    | `ChangeEventHandler`      | —       | Receives native input changes.                 |
+| `label`       | `StaticLabel`             | —       | Displays Payload's field label.                |
+| `description` | `StaticDescription`       | —       | Displays helper text beneath the input.        |
+| `placeholder` | `string \| LabelFunction` | —       | Displays translated placeholder text.          |
+| `required`    | `boolean`                 | `false` | Displays the required marker.                  |
+| `readOnly`    | `boolean`                 | `false` | Disables editing and applies read-only styles. |
+| `showError`   | `boolean`                 | Form    | Displays the current validation error.         |
+| `BeforeInput` | `ReactNode`               | —       | Inserts content before the native control.     |
+| `AfterInput`  | `ReactNode`               | —       | Inserts content after the native control.      |
+| `rows`        | `number`                  | —       | Sets the TextareaInput row count.              |
+| `hasMany`     | `boolean`                 | `false` | Enables TextInput's multi-value mode.          |
+
+_\* An asterisk denotes that a prop is required._
+
+## Custom field usage
+
+Inside a Custom Field, connect the input to Payload's form state with `useField`:
+
+```tsx
+'use client'
+
+import { TextInput, useField } from '@payloadcms/ui'
+
+export function CustomTextField({ field, path }) {
+  const { setValue, showError, value } = useField<string>({ path })
+
+  return (
+    <TextInput
+      label={field.label}
+      onChange={(event) => setValue(event.target.value)}
+      path={path}
+      required={field.required}
+      showError={showError}
+      value={value}
+    />
+  )
+}
+```
+
+## Provider requirements
+
+The Admin Panel supplies the translation and form contexts used by the built-in label, description, and validation components. Use these inputs inside a Payload Custom Field, or provide equivalent contexts when rendering them elsewhere.
+
+# Checkbox and Select Inputs
+
+Source: https://payloadcms.com/docs/ui-components/checkbox-and-select-inputs
+
+`CheckboxInput` and `SelectInput` provide the input-level controls used by Payload's Checkbox and Select fields. They are useful when a Custom Field needs standard Admin styling while controlling its own state.
+
+## Import
+
+```tsx
+import { CheckboxInput, SelectInput } from '@payloadcms/ui'
+```
+
+## CheckboxInput
+
+**Implementation**
+
+```tsx
+const [checked, setChecked] = useState(true)
+
+<CheckboxInput
+  checked={checked}
+  label="Feature this project"
+  name="featured"
+  onToggle={(event) => setChecked(event.target.checked)}
+/>
+```
+
+**Styling**
+
+Style the checkbox control and its checked modifier while leaving the native input and label connection intact.
+
+```css
+.checkbox-input__input {
+  border-color: var(--theme-elevation-400);
+  border-radius: 4px;
+}
+
+.checkbox-input--checked .checkbox-input__input {
+  background: var(--theme-elevation-800);
+  color: var(--theme-elevation-0);
+}
+```
+
+- `background`: Checked control surface.
+- `border-color`: Checkbox outline.
+- `border-radius`: Checkbox corner radius.
+- `color`: Check icon color.
+
+Use `checked` and `onToggle` to control the value. Set `partialChecked` to display the indeterminate treatment used by list-selection interfaces.
+
+## SelectInput
+
+**Implementation**
+
+```tsx
+const options = [
+  { label: 'Planned', value: 'planned' },
+  { label: 'In progress', value: 'in-progress' },
+  { label: 'Complete', value: 'complete' },
+]
+
+const [value, setValue] = useState('in-progress')
+
+<SelectInput
+  label="Status"
+  name="status"
+  onChange={(option) => setValue(option?.value || '')}
+  options={options}
+  path="status"
+  value={value}
+/>
+```
+
+**Styling**
+
+Customize the ReactSelect control within SelectInput while retaining Payload’s field label, description, and error structure.
+
+```css
+.field-type.select .rs__control {
+  background: var(--theme-input-bg);
+  border-color: var(--theme-elevation-250);
+  border-radius: 6px;
+}
+
+.field-type.select .rs__control--is-focused {
+  border-color: var(--theme-elevation-500);
+}
+```
+
+- `--theme-input-bg`: Select control surface.
+- `border-color`: Resting and focused outline color.
+- `border-radius`: Select control corner radius.
+
+`SelectInput` wraps [`ReactSelect`](/docs/v3/ui-components/react-select.md) with Payload's field label, description, and validation structure. Its controlled `value` contains the stored option value rather than the complete option object.
+
+## CheckboxInput props
+
+| Prop             | Type                                   | Default | Description                                |
+| ---------------- | -------------------------------------- | ------- | ------------------------------------------ |
+| `checked`        | `boolean`                              | `false` | Controls the checked state.                |
+| `onToggle` \*    | `ChangeEventHandler<HTMLInputElement>` | —       | Receives changes from the native checkbox. |
+| `label`          | `StaticLabel`                          | —       | Displays the checkbox label.               |
+| `partialChecked` | `boolean`                              | `false` | Displays the indeterminate treatment.      |
+| `readOnly`       | `boolean`                              | `false` | Disables interaction.                      |
+| `required`       | `boolean`                              | `false` | Marks the native input as required.        |
+
+## SelectInput props
+
+| Prop          | Type                   | Default | Description                                   |
+| ------------- | ---------------------- | ------- | --------------------------------------------- |
+| `name` \*     | `string`               | —       | Names the select input.                       |
+| `path` \*     | `string`               | —       | Identifies the field and connects its UI.     |
+| `options` \*  | `OptionObject[]`       | —       | Supplies the available translated options.    |
+| `value`       | `string \| string[]`   | —       | Supplies the selected stored value or values. |
+| `onChange`    | `ReactSelect.onChange` | —       | Receives the selected option object.          |
+| `hasMany`     | `boolean`              | `false` | Enables multiple values.                      |
+| `isSortable`  | `boolean`              | `true`  | Enables reordering in multi-value mode.       |
+| `isClearable` | `boolean`              | `true`  | Allows the selected value to be cleared.      |
+| `readOnly`    | `boolean`              | `false` | Disables interaction.                         |
+| `showError`   | `boolean`              | Form    | Displays the current validation error.        |
+
+_\* An asterisk denotes that a prop is required._
+
+## Provider requirements
+
+Both inputs use Payload's translation context. `SelectInput` also composes the standard field label, description, and error components, which can read the surrounding form context in a Custom Field.
+
+# Relationship and Upload Inputs
+
+Source: https://payloadcms.com/docs/ui-components/relationship-and-upload-inputs
+
+`RelationshipInput` and `UploadInput` are the input-level interfaces used by Payload's relationship-backed fields. Use them when replacing a field component while preserving Payload's document-selection workflows.
+
+## Import
+
+```tsx
+import { RelationshipInput, UploadInput } from '@payloadcms/ui'
+```
+
+## RelationshipInput
+
+**Implementation**
+
+```tsx
+const [value, setValue] = useState<ValueWithRelation[]>([])
+
+<RelationshipInput
+  allowCreate={false}
+  appearance="select"
+  hasMany
+  label="Related posts"
+  onChange={setValue}
+  path="relatedPosts"
+  placeholder="Choose posts"
+  relationTo={['posts']}
+  value={value}
+/>
+```
+
+**Styling**
+
+Style the RelationshipInput select surface through its field wrapper while preserving document drawer behavior.
+
+```css
+.field-type.relationship .rs__control {
+  background: var(--theme-input-bg);
+  border-color: var(--theme-elevation-250);
+  border-radius: 6px;
+}
+```
+
+- `--theme-input-bg`: Relationship control surface.
+- `border-color`: Relationship control outline.
+- `border-radius`: Relationship control corner radius.
+
+`RelationshipInput` selects documents from one or more Collections. Use `appearance="select"` for searchable inline results or `appearance="drawer"` to choose documents from a List Drawer.
+
+## UploadInput
+
+**Implementation**
+
+```tsx
+const [value, setValue] = useState<string | number>()
+
+<UploadInput
+  allowCreate
+  label="Media"
+  onChange={setValue}
+  path="media"
+  relationTo="media"
+  required
+  value={value}
+/>
+```
+
+**Styling**
+
+Customize the UploadInput drop target and its Create New and Choose from existing controls without changing their drawer behavior.
+
+```css
+.field-type.upload .dropzone {
+  background: var(--theme-elevation-50);
+  border-color: var(--theme-elevation-250);
+  border-radius: 6px;
+}
+
+.field-type.upload .btn--style-pill {
+  border-color: var(--theme-elevation-300);
+}
+```
+
+- `background`: Upload selection surface.
+- `border-color`: Drop target or action outline.
+- `border-radius`: Upload selection corner radius.
+
+`UploadInput` relates documents from an upload-enabled Collection. Its empty state includes **Create New**, **Choose from existing**, and drag-and-drop file intake when the current user has permission to create uploads.
+
+This differs from [`Upload`](/docs/v3/ui-components/upload.md), which manages the file attached to an upload-enabled Collection's own Edit View, and [`Dropzone`](/docs/v3/ui-components/dropzone.md), which only handles incoming files.
+
+## RelationshipInput props
+
+| Prop            | Type                                       | Default    | Description                                     |
+| --------------- | ------------------------------------------ | ---------- | ----------------------------------------------- |
+| `relationTo` \* | `string[]`                                 | —          | Identifies the selectable Collections.          |
+| `path` \*       | `string`                                   | —          | Identifies the form field.                      |
+| `hasMany` \*    | `boolean`                                  | —          | Selects one document or multiple documents.     |
+| `value`         | `ValueWithRelation \| ValueWithRelation[]` | —          | Supplies the controlled relationship value.     |
+| `onChange` \*   | `(value) => void`                          | —          | Receives the updated relationship value.        |
+| `appearance`    | `'select' \| 'drawer'`                     | `'select'` | Chooses inline search or List Drawer selection. |
+| `allowCreate`   | `boolean`                                  | `true`     | Allows creating related documents.              |
+| `allowEdit`     | `boolean`                                  | `true`     | Allows opening selected documents for editing.  |
+| `filterOptions` | `FilterOptionsResult`                      | —          | Restricts selectable documents.                 |
+| `isSortable`    | `boolean`                                  | `true`     | Enables reordering when `hasMany` is enabled.   |
+| `readOnly`      | `boolean`                                  | `false`    | Disables selection and editing.                 |
+
+## UploadInput props
+
+| Prop             | Type                                      | Default | Description                                     |
+| ---------------- | ----------------------------------------- | ------- | ----------------------------------------------- |
+| `relationTo` \*  | `string \| string[]`                      | —       | Identifies the upload-enabled Collections.      |
+| `path` \*        | `string`                                  | —       | Identifies the form field.                      |
+| `value`          | `string \| number \| ValueWithRelation[]` | —       | Supplies the controlled upload relationship.    |
+| `onChange`       | `(value) => void`                         | —       | Receives the updated upload relationship.       |
+| `allowCreate`    | `boolean`                                 | `false` | Shows file creation when permissions allow it.  |
+| `hasMany`        | `boolean`                                 | `false` | Allows multiple upload documents.               |
+| `displayPreview` | `boolean`                                 | —       | Displays thumbnails for selected uploads.       |
+| `maxRows`        | `number`                                  | —       | Limits selections in multi-value mode.          |
+| `filterOptions`  | `FilterOptionsResult`                     | —       | Restricts documents shown in the List Drawer.   |
+| `readOnly`       | `boolean`                                 | `false` | Disables selection, removal, and upload intake. |
+
+_\* An asterisk denotes that a prop is required._
+
+## Provider requirements
+
+These inputs are intended for Payload Custom Fields. They rely on the Admin Panel's Config, Auth, Translation, Locale, Modal, drawer, and document-event contexts. `UploadInput` also uses Payload's bulk-upload context. Use the complete `RelationshipField` or `UploadField` when Payload should manage the field configuration and form connection for you.
 
 # ErrorPill
 
@@ -22173,6 +24432,96 @@ These are the props most commonly used with this component. See its exported typ
 | ----------- | ------------------- | ------- | ----------------------------------------------- |
 | `isActive`  | `boolean`           | `false` | Switches from the menu icon to a close icon.    |
 | `closeIcon` | `'x' \| 'collapse'` | `'x'`   | Selects the icon displayed in the active state. |
+
+# Icons
+
+Source: https://payloadcms.com/docs/ui-components/icons
+
+Payload exports the icons used throughout the Admin Panel so custom UI can use the same visual language.
+
+## Import
+
+```tsx
+import { CopyIcon, EditIcon, PlusIcon, SearchIcon } from '@payloadcms/ui'
+```
+
+## Available icons
+
+**Implementation**
+
+```tsx
+import { CopyIcon, EditIcon, PlusIcon, SearchIcon } from '@payloadcms/ui'
+
+export function Toolbar() {
+  return (
+    <div className="toolbar">
+      <span aria-hidden="true"><PlusIcon /></span>
+      <span aria-hidden="true"><EditIcon /></span>
+      <span aria-hidden="true"><CopyIcon /></span>
+      <span aria-hidden="true"><SearchIcon /></span>
+    </div>
+  )
+}
+```
+
+**Styling**
+
+Icons use currentColor, so set color on a wrapper to follow your theme. Target the nested SVG only when the surrounding layout requires a consistent size.
+
+```css
+.toolbar-icon {
+  color: var(--theme-text);
+  display: inline-flex;
+}
+
+.toolbar-icon svg {
+  height: 1.25rem;
+  width: 1.25rem;
+}
+
+.toolbar-icon:hover {
+  color: var(--theme-elevation-600);
+}
+```
+
+- `color`: Stroke or fill color inherited by the icon.
+- `height`: Rendered icon height.
+- `width`: Rendered icon width.
+
+Icons inherit their color from the surrounding text. Their default dimensions vary according to where each icon is used in the Admin Panel; apply a shared class to the surrounding element when your layout requires a consistent size.
+
+The client export includes:
+
+- `CalendarIcon`, `CheckIcon`, `ChevronIcon`, `CloseMenuIcon`, and `CodeBlockIcon`
+- `CopyIcon`, `DocumentIcon`, `DragHandleIcon`, `EditIcon`, and `ExternalLinkIcon`
+- `FolderIcon`, `GearIcon`, `GridViewIcon`, `LineIcon`, and `LinkIcon`
+- `ListViewIcon`, `LogOutIcon`, `MenuIcon`, `MinimizeMaximizeIcon`, and `MoreIcon`
+- `MoveFolderIcon`, `PlusIcon`, `SearchIcon`, `SwapIcon`, and `XIcon`
+- `ErrorIcon`, `InfoIcon`, `SuccessIcon`, and `WarningIcon` for notification states
+
+## Configurable icons
+
+Most icons render without props. These exports expose additional options:
+
+| Component              | Props                                         | Description                                          |
+| ---------------------- | --------------------------------------------- | ---------------------------------------------------- |
+| `ChevronIcon`          | `direction`, `size`, `ariaLabel`, `className` | Sets its direction, preset size, label, or class.    |
+| `GearIcon`             | `ariaLabel`, `className`                      | Adds an accessible label or custom class.            |
+| `MinimizeMaximizeIcon` | `isMinimized`, `className`                    | Switches between the minimize and maximize graphics. |
+| `DragHandleIcon`       | `className`                                   | Adds a custom class.                                 |
+| `EditIcon`             | `className`                                   | Adds a custom class.                                 |
+| `ExternalLinkIcon`     | `className`                                   | Adds a custom class.                                 |
+| `FolderIcon`           | `className`                                   | Adds a custom class.                                 |
+| `MoreIcon`             | `className`                                   | Adds a custom class.                                 |
+| `XIcon`                | `className`                                   | Adds a custom class.                                 |
+
+## Accessibility
+
+- Treat an icon as decorative when adjacent text already describes the action.
+- Give an icon-only button or link an accessible name on the interactive element.
+- Do not use color alone to communicate a state or outcome.
+
+The icons use SVG markup and require no Payload providers.
 
 # Link
 
@@ -22670,7 +25019,7 @@ Payload's navigation controls support the Admin Panel's menu, collapsible groups
 ## Import
 
 ```tsx
-import { Hamburger, NavGroup, NavToggler, SetStepNav } from '@payloadcms/ui'
+import { Hamburger, NavGroup, NavToggler } from '@payloadcms/ui'
 ```
 
 ## Menu state
@@ -22728,18 +25077,7 @@ Customize the Hamburger’s control surface, icon color, and icon scale without 
 
 ## Step navigation
 
-`SetStepNav` updates the Admin Panel's current step navigation and renders no visible element itself.
-
-```tsx
-<SetStepNav
-  nav={[
-    { label: 'Collection', url: '/admin/collections/example' },
-    { label: 'Document' },
-  ]}
-/>
-```
-
-Each item accepts a `label` and an optional `url`. Keep the `nav` array stable when possible so the context is not updated on every render.
+Use `SetStepNav` or `useStepNav` to populate the breadcrumb trail in the Admin header from a Custom View. See [Step Navigation](/docs/v3/ui-components/step-navigation.md) for complete examples and API guidance.
 
 ## Common props
 
@@ -22766,7 +25104,7 @@ _\* An asterisk denotes that a prop is required._
 
 ## Provider requirements
 
-`NavToggler` and `NavGroup` depend on the navigation, preferences, translation, and window information supplied by the Admin Panel. `SetStepNav` depends on Payload's step navigation context. Use them within Admin Panel Custom Components rather than as standalone website navigation primitives.
+`NavToggler` and `NavGroup` depend on the navigation, preferences, translation, and window information supplied by the Admin Panel. Use them within Admin Panel Custom Components rather than as standalone website navigation primitives.
 
 # Pill
 
@@ -23093,23 +25431,75 @@ Use ReactSelect’s stable rs__ classes under the Payload wrapper to customize t
 
 Store the selected option object rather than only its value. Use `isMulti` when users can select more than one option.
 
+## Multiple values
+
+**Implementation**
+
+```tsx
+const options = [
+  { label: 'Posts', value: 'posts' },
+  { label: 'Media', value: 'media' },
+  { label: 'Pages', value: 'pages' },
+  { label: 'Users', value: 'users' },
+]
+
+const [value, setValue] = useState(options.slice(0, 2))
+
+<ReactSelect
+  isMulti
+  isSortable
+  onChange={setValue}
+  options={options}
+  placeholder="Select collections"
+  value={value}
+/>
+```
+
+**Styling**
+
+Use ReactSelect’s stable rs__ classes under the Payload wrapper to customize the control and option states.
+
+```css
+.react-select .rs__control {
+  background: #ffffff;
+  border: 1px solid #6d5dfc;
+  border-radius: 8px;
+}
+
+.react-select .rs__option--is-focused {
+  background: #ede9fe;
+}
+
+.react-select .rs__option--is-selected {
+  background: #6d5dfc;
+  color: #ffffff;
+}
+```
+
+- `background`: Control or option surface.
+- `border`: Control outline.
+- `color`: Selected option label.
+
+Enable `isMulti` to store an array of selected options. Add `isSortable` when users should also be able to reorder those values by dragging them.
+
 ## Common props
 
 These are the props most commonly used with this component. See its exported types in `@payloadcms/ui` for the complete list.
 
-| Prop           | Type                                  | Default   | Description                                     |
-| -------------- | ------------------------------------- | --------- | ----------------------------------------------- |
-| `options` \*   | `Option[] \| OptionGroup[]`           | —         | Options displayed in the menu.                  |
-| `value`        | `Option \| Option[]`                  | —         | Selected option or options.                     |
-| `onChange`     | `(value: Option \| Option[]) => void` | —         | Runs when the selection changes.                |
-| `placeholder`  | `string \| LabelFunction`             | Localized | Sets the empty-state label.                     |
-| `isMulti`      | `boolean`                             | `false`   | Allows multiple selected values.                |
-| `isClearable`  | `boolean`                             | `true`    | Displays a control for clearing the value.      |
-| `isSearchable` | `boolean`                             | `true`    | Allows options to be filtered by typing.        |
-| `isCreatable`  | `boolean`                             | `false`   | Allows users to create values not in `options`. |
-| `disabled`     | `boolean`                             | `false`   | Prevents interaction.                           |
-| `isLoading`    | `boolean`                             | `false`   | Displays the loading state.                     |
-| `showError`    | `boolean`                             | `false`   | Applies the validation error style.             |
+| Prop           | Type                                  | Default   | Description                                        |
+| -------------- | ------------------------------------- | --------- | -------------------------------------------------- |
+| `options` \*   | `Option[] \| OptionGroup[]`           | —         | Options displayed in the menu.                     |
+| `value`        | `Option \| Option[]`                  | —         | Selected option or options.                        |
+| `onChange`     | `(value: Option \| Option[]) => void` | —         | Runs when the selection changes.                   |
+| `placeholder`  | `string \| LabelFunction`             | Localized | Sets the empty-state label.                        |
+| `isMulti`      | `boolean`                             | `false`   | Allows multiple selected values.                   |
+| `isSortable`   | `boolean`                             | `false`   | Allows selected multi-value items to be reordered. |
+| `isClearable`  | `boolean`                             | `true`    | Displays a control for clearing the value.         |
+| `isSearchable` | `boolean`                             | `true`    | Allows options to be filtered by typing.           |
+| `isCreatable`  | `boolean`                             | `false`   | Allows users to create values not in `options`.    |
+| `disabled`     | `boolean`                             | `false`   | Prevents interaction.                              |
+| `isLoading`    | `boolean`                             | `false`   | Displays the loading state.                        |
+| `showError`    | `boolean`                             | `false`   | Applies the validation error style.                |
 
 _\* An asterisk denotes that a prop is required._
 
@@ -23263,6 +25653,127 @@ These are the props most commonly used with this component. See its exported typ
 | `transparent`         | `boolean`          | `false`  | Allows the underlying background to remain visible. |
 | `disableInlineStyles` | `boolean`          | `false`  | Leaves dimensions to a custom class or stylesheet.  |
 
+# Step Navigation
+
+Source: https://payloadcms.com/docs/ui-components/step-navigation
+
+Step navigation is the breadcrumb trail rendered in the Admin Panel header. In a Custom View, use `SetStepNav` or `useStepNav` to populate that existing interface—you do not need to render another breadcrumb component.
+
+## Import
+
+```tsx
+import { SetStepNav, type StepNavItem, useStepNav } from '@payloadcms/ui'
+```
+
+## Custom View usage
+
+Use `SetStepNav` when the complete breadcrumb trail is known while rendering the Custom View.
+
+**Implementation**
+
+```tsx
+const stepNav = [
+  { label: 'Orders', url: '/admin/collections/orders' },
+  { label: 'Order #1042' },
+]
+
+export function OrderView() {
+  return (
+    <>
+      <SetStepNav nav={stepNav} />
+      <Gutter>
+        <h1>Order #1042</h1>
+      </Gutter>
+    </>
+  )
+}
+```
+
+**Styling**
+
+Target the existing StepNav in your Admin Panel stylesheet to adjust breadcrumb spacing and linked-item treatment across Custom Views.
+
+```css
+.step-nav {
+  gap: 0.75rem;
+}
+
+.step-nav a {
+  color: #6d5dfc;
+  text-decoration-color: #b8adff;
+}
+```
+
+- `gap`: Space between the home link, separators, and breadcrumb items.
+- `color`: Linked breadcrumb text and inherited icon color.
+- `text-decoration-color`: Underline color shown when a breadcrumb link is hovered or focused.
+
+`SetStepNav` renders no visible element itself. It updates the step navigation provider that surrounds Admin Panel views, and the header displays the resulting items.
+
+Define a static `nav` array outside the component when its contents do not change. This keeps the array reference stable and avoids updating the context after every render.
+
+## Dynamic navigation
+
+Use `useStepNav` when breadcrumb items depend on state that changes while the view remains mounted.
+
+```tsx
+'use client'
+
+import { useEffect } from 'react'
+import { useStepNav } from '@payloadcms/ui'
+
+export function OrderView({ orderNumber }: { orderNumber: string }) {
+  const { setStepNav } = useStepNav()
+
+  useEffect(() => {
+    setStepNav([
+      { label: 'Orders', url: '/admin/collections/orders' },
+      { label: `Order #${orderNumber}` },
+    ])
+  }, [orderNumber, setStepNav])
+
+  return <h1>Order #{orderNumber}</h1>
+}
+```
+
+Prefer `SetStepNav` unless you need direct access to the current `stepNav` value or need to update it in response to local state.
+
+## StepNavItem
+
+Each item contains a `label` and may contain a `url`.
+
+| Property   | Type                                          | Description                                                 |
+| ---------- | --------------------------------------------- | ----------------------------------------------------------- |
+| `label` \* | `StaticLabel \| LabelFunction \| JSX.Element` | Displays the translated or custom breadcrumb label.         |
+| `url`      | `string`                                      | Makes a non-current breadcrumb item navigable when present. |
+
+The final item represents the current location and is rendered as text. Earlier items with a `url` are rendered as links.
+
+_\* An asterisk denotes that a property is required._
+
+## SetStepNav props
+
+These are the props accepted by `SetStepNav`.
+
+| Prop     | Type            | Default | Description                                       |
+| -------- | --------------- | ------- | ------------------------------------------------- |
+| `nav` \* | `StepNavItem[]` | —       | Replaces the items displayed in the Admin header. |
+
+_\* An asterisk denotes that a prop is required._
+
+## Accessibility
+
+- Use short labels that identify each level in the current hierarchy.
+- Keep the current location as the final item.
+- Provide URLs for earlier items when users can safely return to those views.
+- Avoid duplicating the current page heading in every breadcrumb level.
+
+## Provider requirements
+
+`SetStepNav` and `useStepNav` depend on the step navigation provider already included in the Payload Admin Panel. Use them within an Admin Panel Custom Component or Custom View. Outside that context, setting the navigation is a no-op.
+
+See [Custom Views](/docs/v3/custom-components/custom-views.md) for configuring a view in the Admin Panel.
+
 # Table
 
 Source: https://payloadcms.com/docs/ui-components/table
@@ -23337,6 +25848,8 @@ Keep each column's `renderedCells` array in the same order as `data`. Columns wi
 
 `renderedCells` accepts React nodes, so simple custom tables can format values directly. Payload also exports `DefaultCell` for rendering values from Payload field configurations. `DefaultCell` expects the Config and Translation providers available inside the Admin Panel.
 
+See [Table Cells](/docs/v3/ui-components/table-cells.md) for built-in field rendering and the custom Cell Component extension point.
+
 ## Common props
 
 These are the props most commonly used with this component. See its exported types in `@payloadcms/ui` for the complete list.
@@ -23349,6 +25862,215 @@ These are the props most commonly used with this component. See its exported typ
 | `BeforeTable` | `ReactNode`                 | —           | Renders content immediately before the table.        |
 
 _\* An asterisk denotes that a prop is required._
+
+# Table Cells
+
+Source: https://payloadcms.com/docs/ui-components/table-cells
+
+Payload's table-cell components format field values inside Admin Panel tables. Use `DefaultCell` when a custom table should follow Payload's built-in field formatting, or register a custom Cell Component when a column needs purpose-specific output.
+
+This guide covers the table-cell primitives exported from `@payloadcms/ui`. The Field Config shown below is the registration point for a custom cell, not a general guide to Payload fields.
+
+## Import
+
+```tsx
+import {
+  DateCell,
+  DefaultCell,
+  RenderDefaultCell,
+  useCellProps,
+} from '@payloadcms/ui'
+import type {
+  DefaultCellComponentProps,
+  DefaultServerCellComponentProps,
+} from 'payload'
+```
+
+## Custom cell
+
+A custom Cell Component receives the current value as `cellData` and the complete document as `rowData`. Use the value to apply a distinct visual treatment to each option your field supports.
+
+**Implementation**
+
+```tsx
+'use client'
+
+import type { DefaultCellComponentProps } from 'payload'
+import { Pill } from '@payloadcms/ui'
+
+const variantLabels = {
+  alpha: 'Alpha',
+  beta: 'Beta',
+  gamma: 'Gamma',
+  delta: 'Delta',
+  epsilon: 'Epsilon',
+} as const
+
+type Variant = keyof typeof variantLabels
+
+const isVariant = (value: unknown): value is Variant =>
+  typeof value === 'string' && value in variantLabels
+
+export const CustomCell = ({ cellData }: DefaultCellComponentProps) => {
+  const variant = isVariant(cellData) ? cellData : 'other'
+  const label = isVariant(cellData)
+    ? variantLabels[cellData]
+    : String(cellData ?? 'Other')
+
+  return (
+    <Pill className={['custom-cell', 'custom-cell--' + variant].join(' ')}>
+      {label}
+    </Pill>
+  )
+}
+```
+
+**Styling**
+
+Use one shared cell rule and assign color tokens from a stable modifier class for each known value. Values without a modifier use the neutral fallback colors.
+
+```css
+.table .custom-cell {
+  background: var(--cell-background, var(--theme-elevation-100));
+  border: 1px solid var(--cell-border, var(--theme-elevation-250));
+  border-radius: 999px;
+  color: var(--cell-text, var(--theme-text));
+  font-weight: 600;
+}
+
+.custom-cell--alpha {
+  --cell-background: #eee8ff;
+  --cell-border: #a99be8;
+  --cell-text: #41317d;
+}
+
+.custom-cell--beta {
+  --cell-background: #dff1ff;
+  --cell-border: #78add1;
+  --cell-text: #174d70;
+}
+
+.custom-cell--gamma {
+  --cell-background: #ffe3f0;
+  --cell-border: #d68eae;
+  --cell-text: #71334f;
+}
+
+.custom-cell--delta {
+  --cell-background: #dff5e8;
+  --cell-border: #7eb996;
+  --cell-text: #245d3b;
+}
+
+.custom-cell--epsilon {
+  --cell-background: #fff0d9;
+  --cell-border: #d2a25d;
+  --cell-text: #704914;
+}
+```
+
+- `--cell-background`: Surface color for a custom value.
+- `--cell-text`: Text color for a custom value.
+- `--cell-border`: Outline color for a custom value.
+- `border-radius`: Shape of the custom value treatment.
+- `font-weight`: Emphasis applied to the custom value.
+
+This example derives a stable `custom-cell--{value}` modifier from an allowlist. A shared CSS rule defines the cell treatment, while each modifier supplies its background, text, and border colors. Unexpected values fall back to the neutral Payload theme colors.
+
+Register the component through `admin.components.Cell` on the field whose column it replaces:
+
+```ts
+import type { Field } from 'payload'
+
+export const variantField: Field = {
+  name: 'variant',
+  type: 'select',
+  options: ['alpha', 'beta', 'gamma', 'delta', 'epsilon'],
+  admin: {
+    components: {
+      Cell: '/components/CustomCell',
+    },
+  },
+}
+```
+
+Use `DefaultCellComponentProps` for a Client Component and `DefaultServerCellComponentProps` for a Server Component. The prop types come from `payload`, while any visual primitives used by the cell—such as `Pill` in this example—come from `@payloadcms/ui`.
+
+## Default field rendering
+
+`DefaultCell` selects Payload's standard renderer for the supplied field type. For types without a specialized renderer, it displays the value directly.
+
+**Implementation**
+
+```tsx
+<DefaultCell
+  cellData={row.title}
+  collectionSlug="posts"
+  field={titleField}
+  link={false}
+  rowData={row}
+/>
+```
+
+**Styling**
+
+Target the column class generated from each accessor to adjust a built-in cell without replacing its value formatting.
+
+```css
+.table .cell-title {
+  color: var(--theme-text);
+  font-weight: 600;
+}
+
+.table .cell-publishedAt {
+  color: var(--theme-elevation-600);
+}
+```
+
+- `color`: Text color for a specific column.
+- `font-weight`: Text emphasis for a specific column.
+
+Pass the same field configuration and row data used to build the surrounding column. Set `link` when the value should navigate to the document, or provide `onClick` when the cell performs a custom selection action.
+
+`DateCell` is the specialized date renderer used by `DefaultCell`. It applies the field's `admin.date.displayFormat`, the root Admin date format, and timezone data when configured. Most custom tables should use `DefaultCell` for a date field rather than call `DateCell` directly.
+
+## Advanced cell composition
+
+`RenderDefaultCell` is the lower-level wrapper used by Payload's List View. In addition to rendering `DefaultCell`, it coordinates linked cells with `TableColumnsProvider` and a List Drawer.
+
+`useCellProps` reads the current `DefaultCellComponentProps` from that wrapper. It is useful when replacing Payload's linked-cell output, but it returns `null` outside `RenderDefaultCell`.
+
+For an ordinary custom Cell Component, use the props passed directly to the component instead of adding either API.
+
+## Common props
+
+These are the props most commonly used with `DefaultCell`. See `DefaultCellComponentProps` from `payload` for the complete type.
+
+| Prop              | Type          | Description                                              |
+| ----------------- | ------------- | -------------------------------------------------------- |
+| `cellData*`       | `unknown`     | Supplies the value for the current field and row.        |
+| `collectionSlug*` | `string`      | Identifies the Collection represented by the table.      |
+| `field*`          | `ClientField` | Selects Payload's renderer and formatting configuration. |
+| `rowData*`        | `RowData`     | Supplies the complete document represented by the row.   |
+| `link`            | `boolean`     | Wraps the displayed value in a document link.            |
+| `linkURL`         | `string`      | Overrides the URL generated for a linked cell.           |
+| `onClick`         | `function`    | Replaces linked behavior with a cell action.             |
+| `customCellProps` | `object`      | Supplies project-specific data to a custom cell.         |
+
+_\* An asterisk denotes that a prop is required._
+
+## Accessibility
+
+- Render text alongside color when a custom cell communicates status.
+- Use a link only when the cell navigates and a button only when it performs an action.
+- Keep custom output concise so the table remains readable at narrow widths.
+- Preserve an understandable text value when adding icons or visual formatting.
+
+## Provider requirements
+
+`DefaultCell` and `DateCell` use the Config and Translation providers supplied by the Payload Admin Panel. `RenderDefaultCell` additionally expects Table Columns and List Drawer context. Custom Cell Components registered through a Field Config receive their props from Payload automatically.
+
+See [Fields](/docs/v3/fields/overview.md#cell) for the complete Cell Component extension point and [Table](/docs/v3/ui-components/table.md) for composing rows and columns.
 
 # Thumbnail
 
@@ -23651,36 +26373,41 @@ export const Media: CollectionConfig = {
 }
 ```
 
-## File selection
+## Empty state
 
-The empty `Upload` state composes Payload's `Dropzone` for drag, drop, paste, and file selection behavior.
+The empty `Upload` state composes Payload's `Dropzone` with controls for selecting a local file or pasting a remote URL.
 
 **Implementation**
 
 ```tsx
 const inputRef = useRef<HTMLInputElement>(null)
-const [fileNames, setFileNames] = useState<string[]>([])
+const [fileName, setFileName] = useState<string>()
 
-const selectFiles = (files: FileList) => {
-  setFileNames(Array.from(files, (file) => file.name))
+const selectFile = (files: FileList) => {
+  setFileName(files[0]?.name)
 }
 
-<Dropzone multipleFiles onChange={selectFiles}>
+<Dropzone onChange={selectFile}>
   <Button
+    buttonStyle="pill"
     margin={false}
     onClick={() => inputRef.current?.click()}
+    size="small"
   >
-    Select files
+    Select a file
   </Button>
   <input
-    aria-label="Select files"
+    aria-label="Select a file"
     hidden
-    multiple
-    onChange={(event) => event.target.files && selectFiles(event.target.files)}
+    onChange={(event) => event.target.files && selectFile(event.target.files)}
     ref={inputRef}
     type="file"
   />
-  <span>{fileNames.length ? fileNames.join(', ') : 'or drag and drop files here'}</span>
+  <span>or</span>
+  <Button buttonStyle="pill" margin={false} size="small">
+    Paste URL
+  </Button>
+  <span>{fileName || 'or drag and drop a file'}</span>
 </Dropzone>
 ```
 
@@ -23706,6 +26433,8 @@ Target the base Dropzone and its dragging state to create a branded upload area 
 - `border-radius`: Dropzone corner radius.
 
 Use [`Dropzone`](/docs/v3/ui-components/dropzone.md) directly when you only need file intake. Use `Upload` when the file must participate in an upload-enabled Collection's form and persistence workflow.
+
+The **Create New** and **Choose from existing** controls shown by an Upload field belong to the relationship field interface, which selects documents from an upload-enabled Collection. They are not rendered by this `Upload` component or by `Dropzone`.
 
 ## Custom actions
 
@@ -23740,6 +26469,152 @@ _\* An asterisk denotes that a prop is required._
 `Upload` is not a standalone website file input. It consumes Payload's Config, DocumentInfo, Form, Translation, Modal, UploadControls, and UploadEdits contexts. Use it in the upload Edit View override shown above rather than constructing those providers manually.
 
 For the complete customization path, see [Customizing the Upload UI](/docs/v3/upload/overview.md#customizing-the-upload-ui).
+
+# Upload Helpers
+
+Source: https://payloadcms.com/docs/ui-components/upload-helpers
+
+Payload's upload helpers support the file-management interface around an upload-enabled Collection. Use them when extending an upload workflow that already has a document, upload configuration, and the surrounding Admin context.
+
+## Import
+
+```tsx
+import { EditUpload, FileDetails, PreviewSizes } from '@payloadcms/ui'
+```
+
+## File details
+
+`FileDetails` presents a file thumbnail, URL, dimensions, size, and MIME type. It can also display removal, image-adjustment, generated-size, and custom upload actions.
+
+**Implementation**
+
+```tsx
+<FileDetails
+  collectionSlug="media"
+  doc={doc}
+  hideRemoveFile
+  uploadConfig={uploadConfig}
+/>
+```
+
+**Styling**
+
+Customize the FileDetails surface and thumbnail while preserving its metadata, copy, adjustment, and removal behavior.
+
+```css
+.file-details {
+  background: #f9f8ff;
+  border: 1px solid #c8c0ff;
+  border-radius: 8px;
+}
+
+.file-details__thumbnail {
+  border-radius: 6px;
+}
+```
+
+- `background`: File summary surface.
+- `border`: File summary outline.
+- `border-radius`: Summary and thumbnail corner radius.
+
+The component renders a static summary by default. Pass the sortable row props when it represents one item in a multi-upload field.
+
+## Generated image sizes
+
+`PreviewSizes` lets users compare the original upload with image sizes generated by the Collection's upload configuration.
+
+**Implementation**
+
+```tsx
+<PreviewSizes doc={doc} uploadConfig={uploadConfig} />
+```
+
+**Styling**
+
+Target the selected size and structural regions to align the PreviewSizes browser with a project’s media treatment.
+
+```css
+.preview-sizes__sizeOption:hover,
+.preview-sizes--selected {
+  background: #f3f1ff;
+}
+
+.preview-sizes__imageWrap {
+  border-color: #c8c0ff;
+}
+```
+
+- `background`: Selected and hovered size surface.
+- `border-color`: Divider between the preview and size list.
+
+The available options come from `uploadConfig.imageSizes` and matching entries in `doc.sizes`. Selecting an option updates the main preview and metadata.
+
+## Image adjustments
+
+`EditUpload` provides Payload's crop and focal-point controls. Use `showCrop` and `showFocalPoint` to expose the adjustments enabled by the upload Collection.
+
+```tsx
+<EditUpload
+  fileName={doc.filename}
+  fileSrc={doc.url}
+  initialCrop={doc.crop}
+  initialFocalPoint={doc.focalPoint}
+  onSave={(uploadEdits) => updateUploadEdits(uploadEdits)}
+  showCrop
+  showFocalPoint
+/>
+```
+
+`onSave` receives the crop, focal point, and resulting pixel dimensions. The component closes Payload's upload-edit modal after applying the changes.
+
+## Common props
+
+These are the props most commonly used with this component family. See the exported types in `@payloadcms/ui` for the complete list.
+
+### FileDetails
+
+| Prop                  | Type                                  | Default | Description                                      |
+| --------------------- | ------------------------------------- | ------- | ------------------------------------------------ |
+| `collectionSlug` \*   | `string`                              | —       | Identifies the upload-enabled Collection.        |
+| `doc` \*              | `Data & { sizes?: FileSizes }`        | —       | Supplies file metadata and generated sizes.      |
+| `uploadConfig` \*     | `SanitizedCollectionConfig['upload']` | —       | Controls previews and available upload behavior. |
+| `enableAdjustments`   | `boolean`                             | `false` | Shows the image-adjustment action.               |
+| `hasImageSizes`       | `boolean`                             | `false` | Shows the generated-size preview action.         |
+| `hideRemoveFile`      | `boolean`                             | `false` | Hides the file-removal control.                  |
+| `customUploadActions` | `ReactNode[]`                         | —       | Adds project-specific upload actions.            |
+
+### PreviewSizes
+
+| Prop              | Type                                          | Default | Description                                     |
+| ----------------- | --------------------------------------------- | ------- | ----------------------------------------------- |
+| `doc` \*          | `Data & { sizes?: Record<string, FileSize> }` | —       | Supplies original and generated image metadata. |
+| `uploadConfig` \* | `SanitizedCollectionConfig['upload']`         | —       | Defines the configured image-size order.        |
+| `imageCacheTag`   | `string`                                      | —       | Appends a cache-busting tag to preview URLs.    |
+
+### EditUpload
+
+| Prop                | Type                           | Default | Description                                 |
+| ------------------- | ------------------------------ | ------- | ------------------------------------------- |
+| `fileName` \*       | `string`                       | —       | Labels the image being edited.              |
+| `fileSrc` \*        | `string`                       | —       | Supplies the image URL.                     |
+| `onSave`            | `(edits: UploadEdits) => void` | —       | Receives the applied image adjustments.     |
+| `showCrop`          | `boolean`                      | `false` | Enables crop controls.                      |
+| `showFocalPoint`    | `boolean`                      | `false` | Enables focal-point controls.               |
+| `initialCrop`       | `UploadEdits['crop']`          | —       | Sets the initial crop region.               |
+| `initialFocalPoint` | `{ x: number; y: number }`     | —       | Sets the initial focal point by percentage. |
+
+_\* An asterisk denotes that a prop is required._
+
+## Accessibility
+
+- Provide meaningful upload `alt` data so generated-size previews describe the underlying image.
+- Keep file names and metadata available alongside visual thumbnails.
+- Preserve keyboard access when adding custom upload actions.
+- Label destructive removal actions clearly and confirm them when removal cannot be reversed.
+
+## Provider requirements
+
+`FileDetails` and `EditUpload` rely on upload, translation, and modal behavior supplied by the Admin Panel. `PreviewSizes` expects the normalized document and upload configuration produced by an upload-enabled Collection. For complete form and persistence behavior, use [`Upload`](/docs/v3/ui-components/upload.md).
 
 # Authentication Overview
 
@@ -27125,7 +30000,7 @@ import { textStateConfig } from '@/fields/textStateConfig'
 
 **Step 2 — Add a custom text converter**
 
-When using [`RichText` from `@payloadcms/richtext-lexical/react`](/docs/v3/rich-text/lexical.md#rendering-lexical-content-in-react), override the default `text` converter to read the `"$"` key and apply the corresponding CSS as inline styles:
+When using [`RichText` from `@payloadcms/richtext-lexical/react`](/docs/v3/rich-text/converting-jsx.md#richtext-to-jsx), override the default `text` converter to read the `"$"` key and apply the corresponding CSS as inline styles:
 
 ```tsx
 // src/components/RichText/index.tsx
@@ -40051,12 +42926,12 @@ All collection and global tools accept an optional `select` parameter. It limits
 fields are returned in the response, which can significantly reduce token consumption
 when working with large documents.
 
-`select` is a JSON string that follows [Payload's Select API](/docs/v3/queries/select.md)
+`select` is an object that follows [Payload's Select API](/docs/v3/queries/select.md)
 syntax — set a field to `true` to include it:
 
 ```ts
-// In a tool call, pass select as a JSON string:
-// arguments: { select: '{"title": true, "slug": true}' }
+// In a tool call, pass select as an object:
+// arguments: { select: { title: true, slug: true } }
 ```
 
 For example, to list only post titles:
@@ -40074,7 +42949,7 @@ curl -i 'http://localhost:3000/api/mcp' \
     "params": {
       "name": "findPosts",
       "arguments": {
-        "select": "{\"title\": true, \"slug\": true}"
+        "select": { "title": true, "slug": true }
       }
     }
   }'
@@ -40364,11 +43239,11 @@ mcpPlugin({
 
 By default, the full document is returned for every operation. On collections with
 many fields, rich text, or deeply nested relationships this can be very large. Pass
-a `select` JSON string to limit what comes back:
+a `select` object to limit what comes back:
 
 ```bash
 # Return only title and slug instead of the full document
--d '{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"findPosts","arguments":{"select":"{\"title\": true, \"slug\": true}"}}}'
+-d '{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"findPosts","arguments":{"select":{"title":true,"slug":true}}}}'
 ```
 
 See [Reducing Token Usage with `select`](#reducing-token-usage-with-select) for more detail.
